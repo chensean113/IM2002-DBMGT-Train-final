@@ -392,16 +392,30 @@ CREATE INDEX idx_policy_documents_embedding
   relationship types.
   ============================================================ -->
 
-```
 Node labels:
-- TODO
+- `MetroStation`: Represents a station in the metro network.
+- `NationalRailStation`: Represents a station in the national rail network.
 
 Relationship types:
-- TODO
+- `CONNECTED_TO`: Connects two adjacent stations within the same network.
+  - **Properties**: `line` (String, the line connecting them), `travel_time_min` (Integer, the travel time between them).
+- `INTERCHANGES_WITH`: Connects a `MetroStation` and a `NationalRailStation` to map transfer points.
+  - **Properties**: `transfer_time_min` (Integer, estimated walking transfer time, default 5).
 
 Key properties:
-- TODO
-```
+- `MetroStation`:
+`station_id` (String, unique identifier),
+`name` (String),
+`lines` (List of Strings, lines serving the station),
+`is_interchange_metro` (Boolean),
+`is_interchange_national_rail` (Boolean).
+
+- `NationalRailStation`:
+`station_id` (String, unique identifier),
+`name` (String),
+`lines` (List of Strings, lines serving the station),
+`is_interchange_national_rail` (Boolean),
+`is_interchange_metro` (Boolean).
 
 ## Function Signatures We Are Implementing
 
