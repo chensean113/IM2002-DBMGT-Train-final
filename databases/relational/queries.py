@@ -342,6 +342,49 @@ def query_available_seats(
                 (travel_date, schedule_id, fare_class)
             )
             return [dict(row) for row in cur.fetchall()]
+def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[str]:
+    """
+    Select `count` seats that are as close together as possible.
+
+    Args:
+        available_seats: output of query_available_seats()
+        count: number of seats needed
+
+    Returns:
+        List of selected seat IDs.
+    """
+    if not available_seats or count <= 0:
+        return []
+
+    if count >= len(available_seats):
+        return [seat["seat_id"] for seat in available_seats[:count]]
+
+    from collections import defaultdict
+
+    seats_by_row: dict[tuple[str, int], list[dict]] = defaultdict(list)
+
+    for seat in available_seats:
+        seats_by_row[(seat["coach"], seat["row"])].append(seat)
+
+    for row_key in sorted(seats_by_row.keys(), key=lambda x: (x[0], x[1])):
+        row_seats = sorted(
+            seats_by_row[row_key],
+            key=lambda seat: seat["column"]
+        )
+
+        if len(row_seats) >= count:
+            return [seat["seat_id"] for seat in row_seats[:count]]
+
+    sorted_seats = sorted(
+        available_seats,
+        key=lambda seat: (
+            seat["coach"],
+            seat["row"],
+            seat["column"]
+        )
+    )
+
+    return [seat["seat_id"] for seat in sorted_seats[:count]]
 #metro schedules query
 def query_metro_schedules(origin_id: str, destination_id: str) -> list[dict]:
     """
