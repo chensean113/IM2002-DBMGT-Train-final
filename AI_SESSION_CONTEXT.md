@@ -45,6 +45,12 @@ TransitFlow is a Python-based AI chat assistant for a fictional transit operator
 
 ## Agreed Relational Schema
 
+### Relational Schema Progress
+
+- Current progress: PostgreSQL schema design is complete and has been merged into `main`; the active development branch is `feature/sean/seed-postgres`.
+- Key decisions: keep the schema highly normalized, leave graph relationships to Neo4j, use `transaction_ref` for polymorphic relationships, and use `DEFERRABLE INITIALLY DEFERRED` to resolve the circular foreign key between metro and national rail stations.
+- Next step: implement `seed_postgres.py` using the provided `insert_many` helper function (which already handles `ON CONFLICT DO NOTHING`) to load JSON data into PostgreSQL.
+
 <!-- ============================================================
   FILL THIS IN after your team completes the schema design workshop.
   Paste your final CREATE TABLE statements here.
