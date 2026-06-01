@@ -24,24 +24,25 @@ def query_user_profile(user_email: str) -> Optional[dict]:
     Return a user's profile by email.
 
     Args:
-        user_email: user's email address
+        user_email: User email address.
 
     Returns:
-        User profile dictionary or None if not found
+        User profile dictionary or None if not found.
     """
     sql = """
         SELECT
-            user_id,
-            email,
-            first_name,
-            surname,
-            full_name,
-            phone,
-            date_of_birth,
-            is_active,
-            registered_at
-        FROM users
-        WHERE email = %s
+            u.user_id,
+            u.email,
+            u.full_name,
+            u.phone,
+            u.date_of_birth,
+            u.is_active,
+            u.registered_at,
+            q.secret_question
+        FROM users u
+        LEFT JOIN user_security_questions q
+            ON q.user_id = u.user_id
+        WHERE u.email = %s
     """
 
     with _connect() as conn:
@@ -54,33 +55,39 @@ def query_user_profile(user_email: str) -> Optional[dict]:
             if row is None:
                 return None
 
-            return dict(row)
+            result = dict(row)
+
+            name_parts = result["full_name"].split(" ", 1)
+            result["first_name"] = name_parts[0]
+            result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
+
+            return result
 #login user
 def login_user(email: str, password: str) -> Optional[dict]:
     """
     Verify credentials.
 
     Args:
-        email: user email
-        password: user password
+        email: User email address.
+        password: User password.
 
     Returns:
         User dictionary on success, None on failure.
     """
     sql = """
         SELECT
-            user_id,
-            email,
-            full_name,
-            first_name,
-            surname,
-            phone,
-            date_of_birth,
-            is_active
-        FROM users
-        WHERE email = %s
-          AND password = %s
-          AND is_active = TRUE
+            u.user_id,
+            u.email,
+            u.full_name,
+            u.phone,
+            u.date_of_birth,
+            u.is_active
+        FROM users u
+        JOIN user_passwords p
+            ON p.user_id = u.user_id
+        WHERE u.email = %s
+          AND p.password = %s
+          AND u.is_active = TRUE
     """
 
     with _connect() as conn:
@@ -93,23 +100,30 @@ def login_user(email: str, password: str) -> Optional[dict]:
             if row is None:
                 return None
 
-            return dict(row)
+            result = dict(row)
+
+            name_parts = result["full_name"].split(" ", 1)
+            result["first_name"] = name_parts[0]
+            result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
+
+            return result
 #user secret question
 def get_user_secret_question(email: str) -> Optional[str]:
     """
-    Return the secret question for a registered email,
-    or None if the email does not exist.
+    Return the secret question for a registered email, or None if not found.
 
     Args:
-        email: user email address
+        email: User email address.
 
     Returns:
-        Secret question string or None
+        Secret question string or None.
     """
     sql = """
-        SELECT secret_question
-        FROM users
-        WHERE email = %s
+        SELECT q.secret_question
+        FROM users u
+        JOIN user_security_questions q
+            ON q.user_id = u.user_id
+        WHERE u.email = %s
     """
 
     with _connect() as conn:
@@ -124,20 +138,21 @@ def get_user_secret_question(email: str) -> Optional[str]:
 #verify user secret answer
 def verify_secret_answer(email: str, answer: str) -> bool:
     """
-    Return True if the provided answer matches the stored
-    secret answer (case-insensitive).
+    Return True if the provided answer matches the stored secret answer.
 
     Args:
-        email: user email address
-        answer: answer provided by user
+        email: User email address.
+        answer: Answer provided by user.
 
     Returns:
-        True if answer matches, otherwise False
+        True if answer matches, otherwise False.
     """
     sql = """
-        SELECT secret_answer
-        FROM users
-        WHERE email = %s
+        SELECT q.secret_answer
+        FROM users u
+        JOIN user_security_questions q
+            ON q.user_id = u.user_id
+        WHERE u.email = %s
     """
 
     with _connect() as conn:
@@ -150,32 +165,32 @@ def verify_secret_answer(email: str, answer: str) -> bool:
 
             stored_answer = row[0]
 
-            return (
-                stored_answer.strip().lower()
-                == answer.strip().lower()
-            )
+            return stored_answer.strip().lower() == answer.strip().lower()
 #update user password
 def update_password(email: str, new_password: str) -> bool:
     """
     Update the password for a user.
 
     Args:
-        email: user email address
-        new_password: new password
+        email: User email address.
+        new_password: New password.
 
     Returns:
         True if updated successfully, False otherwise.
     """
     sql = """
-        UPDATE users
+        UPDATE user_passwords
         SET password = %s
-        WHERE email = %s
+        WHERE user_id = (
+            SELECT user_id
+            FROM users
+            WHERE email = %s
+        )
     """
 
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (new_password, email))
-
             return cur.rowcount > 0
 #metro fare calculation
 def query_metro_fare(
@@ -636,21 +651,19 @@ def register_user(
     email: str,
     first_name: str,
     surname: str,
-    phone: str,
-    date_of_birth: str,
+    year_of_birth: int,
     password: str,
     secret_question: str,
     secret_answer: str,
 ) -> tuple[bool, str]:
     """
-    Register a new user based on the agreed TransitFlow users schema.
+    Register a new user.
 
     Args:
         email: User email address.
         first_name: User first name.
         surname: User surname.
-        phone: User phone number.
-        date_of_birth: User date of birth in YYYY-MM-DD format.
+        year_of_birth: User birth year.
         password: Plain text password for teaching purposes.
         secret_question: Password recovery question.
         secret_answer: Password recovery answer.
@@ -662,60 +675,43 @@ def register_user(
     email = email.strip().lower()
     first_name = first_name.strip()
     surname = surname.strip()
-    phone = phone.strip()
+    full_name = f"{first_name} {surname}".strip()
     secret_question = secret_question.strip()
     secret_answer = secret_answer.strip()
 
     if not email:
         return False, "Email is required."
 
-    if not first_name:
-        return False, "First name is required."
-
-    if not surname:
-        return False, "Surname is required."
-
-    if not phone:
-        return False, "Phone is required."
+    if not full_name:
+        return False, "Full name is required."
 
     if not password:
         return False, "Password is required."
 
     try:
         parsed_date_of_birth = datetime.strptime(
-            date_of_birth,
+            f"{year_of_birth}-01-01",
             "%Y-%m-%d"
         ).date()
     except ValueError:
-        return False, "date_of_birth must be in YYYY-MM-DD format."
+        return False, "year_of_birth must be a valid year."
 
-    check_sql = """
-        SELECT user_id
-        FROM users
-        WHERE email = %s
-    """
+    conn = psycopg2.connect(PG_DSN)
+    conn.autocommit = False
 
-    insert_sql = """
-        INSERT INTO users (
-            user_id,
-            email,
-            first_name,
-            surname,
-            phone,
-            date_of_birth,
-            password,
-            secret_question,
-            secret_answer
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
-
-    with _connect() as conn:
+    try:
         with conn.cursor() as cur:
-            cur.execute(check_sql, (email,))
-            existing_user = cur.fetchone()
+            cur.execute(
+                """
+                SELECT user_id
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
 
-            if existing_user is not None:
+            if cur.fetchone() is not None:
+                conn.rollback()
                 return False, "Email is already registered."
 
             for _ in range(10):
@@ -728,26 +724,73 @@ def register_user(
 
                 try:
                     cur.execute(
-                        insert_sql,
+                        """
+                        INSERT INTO users (
+                            user_id,
+                            email,
+                            full_name,
+                            phone,
+                            date_of_birth
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
                         (
                             user_id,
                             email,
-                            first_name,
-                            surname,
-                            phone,
+                            full_name,
+                            "N/A",
                             parsed_date_of_birth,
+                        ),
+                    )
+
+                    cur.execute(
+                        """
+                        INSERT INTO user_passwords (
+                            user_id,
                             password,
+                            salt
+                        )
+                        VALUES (%s, %s, %s)
+                        """,
+                        (
+                            user_id,
+                            password,
+                            None,
+                        ),
+                    )
+
+                    cur.execute(
+                        """
+                        INSERT INTO user_security_questions (
+                            user_id,
+                            secret_question,
+                            secret_answer
+                        )
+                        VALUES (%s, %s, %s)
+                        """,
+                        (
+                            user_id,
                             secret_question,
                             secret_answer,
                         ),
                     )
 
+                    conn.commit()
                     return True, user_id
 
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
+                    continue
 
+            conn.rollback()
             return False, "Could not generate a unique user ID."
+
+    except psycopg2.Error as e:
+        conn.rollback()
+        return False, f"Database error: {e}"
+
+    finally:
+        conn.close()
 #booking execution query
 def execute_booking(
     user_id: str,
