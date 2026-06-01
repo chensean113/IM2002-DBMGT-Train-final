@@ -11,6 +11,7 @@ Safe to re-run: implement your inserts with ON CONFLICT DO NOTHING.
 
 import json
 import os
+import bcrypt
 import sys
 from datetime import date, datetime, time
 
@@ -413,53 +414,55 @@ def seed_national_rail_seat_layouts(cur):
     seed_seat_layouts(cur)
 
 
-def seed_users(cur):
+def seed_users(cursor):
     file_path = os.path.join("train-mock-data", "registered_users.json")
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    print(f"  -> 準備載入 {len(data)} 筆使用者資料...")
+    print(f"  -> 準備載入 {len(data)} 筆使用者資料 (採用高資安三表架構與密碼雜湊)...")
 
     users_rows = []
-    for item in data:
-        name_parts = item["full_name"].split(" ", 1)
-        first_name = name_parts[0] if len(name_parts) > 0 else ""
-        surname = name_parts[1] if len(name_parts) > 1 else ""
+    passwords_rows = []
+    questions_rows = []
 
+    for u in data:
+        # 1. 基礎個資
         users_rows.append((
-            item["user_id"],
-            item["email"],
-            first_name,
-            surname,
-            item["phone"],
-            item["date_of_birth"],
-            item["password"],
-            item["secret_question"],
-            item["secret_answer"],
-            item.get("is_active", True),
-            item["registered_at"],
+            u["user_id"],
+            u["email"],
+            u["full_name"],
+            u["phone"],
+            u["date_of_birth"],
+            u.get("is_active", True),
+            u["registered_at"],
         ))
 
-    insert_many(
-        cur,
-        "users",
-        [
-            "user_id",
-            "email",
-            "first_name",
-            "surname",
-            "phone",
-            "date_of_birth",
-            "password",
-            "secret_question",
-            "secret_answer",
-            "is_active",
-            "registered_at",
-        ],
-        users_rows,
-    )
+        # 2. 密碼與 Salt 處理
+        # 動態生成隨機 salt，rounds=12 是目前標準的安全性設定
+        salt = bcrypt.gensalt(rounds=12)
+        # 結合原密碼與 salt 進行雜湊
+        hashed_password = bcrypt.hashpw(u["password"].encode('utf-8'), salt)
 
-    print(f"  -> 成功寫入 {len(users_rows)} 筆使用者資料！")
+        # 由於 bcrypt 處理後會是 bytes 型態，寫入資料庫前需 decode 轉回字串
+        passwords_rows.append((
+            u["user_id"],
+            hashed_password.decode('utf-8'),
+            salt.decode('utf-8')
+        ))
+
+        # 3. 安全提示問答
+        questions_rows.append((
+            u["user_id"],
+            u["secret_question"],
+            u["secret_answer"]
+        ))
+
+    # 依序寫入三張表
+    insert_many(cursor, "users", ["user_id", "email", "full_name", "phone", "date_of_birth", "is_active", "registered_at"], users_rows)
+    insert_many(cursor, "user_passwords", ["user_id", "password", "salt"], passwords_rows)
+    insert_many(cursor, "user_security_questions", ["user_id", "secret_question", "secret_answer"], questions_rows)
+
+    print(f"  -> 成功寫入 {len(users_rows)} 筆使用者資料及其雜湊驗證資訊！")
 
 
 def seed_ticket_types(cur):
