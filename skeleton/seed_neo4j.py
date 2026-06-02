@@ -40,23 +40,60 @@ def seed():
         session.run("MATCH (n) DETACH DELETE n")
         print("  Cleared existing graph data")
 
-        # TODO: Design your node labels and create metro station nodes.
-        # Each station has: station_id, name, lines, and interchange info.
-        # See metro_stations.json for the full data structure.
+        # 1. 建立 MetroStation 節點
+        session.run("""
+            UNWIND $stations AS s
+            MERGE (m:MetroStation {station_id: s.station_id})
+            SET m.name = s.name,
+                m.lines = s.lines,
+                m.is_interchange_metro = s.is_interchange_metro,
+                m.is_interchange_national_rail = s.is_interchange_national_rail
+        """, stations=metro_stations)
+        print("  Created MetroStation nodes")
 
-        # TODO: Design your node labels and create national rail station nodes.
-        # See national_rail_stations.json for the full data structure.
+        # 2. 建立 NationalRailStation 節點
+        session.run("""
+            UNWIND $stations AS s
+            MERGE (n:NationalRailStation {station_id: s.station_id})
+            SET n.name = s.name,
+                n.lines = s.lines,
+                n.is_interchange_national_rail = s.is_interchange_national_rail,
+                n.is_interchange_metro = s.is_interchange_metro
+        """, stations=rail_stations)
+        print("  Created NationalRailStation nodes")
 
-        # TODO: Design your relationship types and create metro links.
-        # Each station lists its adjacent_stations with line and travel_time_min.
-        # Consider what properties to store on the relationship.
+        # 3. 建立 Metro 內部的 CONNECTED_TO 關係 (含 line 與 travel_time_min 屬性)
+        session.run("""
+            UNWIND $stations AS s
+            MATCH (a:MetroStation {station_id: s.station_id})
+            UNWIND s.adjacent_stations AS adj
+            MATCH (b:MetroStation {station_id: adj.station_id})
+            MERGE (a)-[r:CONNECTED_TO {line: adj.line, travel_time_min: adj.travel_time_min}]->(b)
+        """, stations=metro_stations)
+        print("  Created Metro CONNECTED_TO relationships")
 
-        # TODO: Design your relationship types and create national rail links.
+        # 4. 建立 National Rail 內部的 CONNECTED_TO 關係 (含 line 與 travel_time_min 屬性)
+        session.run("""
+            UNWIND $stations AS s
+            MATCH (a:NationalRailStation {station_id: s.station_id})
+            UNWIND s.adjacent_stations AS adj
+            MATCH (b:NationalRailStation {station_id: adj.station_id})
+            MERGE (a)-[r:CONNECTED_TO {line: adj.line, travel_time_min: adj.travel_time_min}]->(b)
+        """, stations=rail_stations)
+        print("  Created National Rail CONNECTED_TO relationships")
 
-        # TODO: Create interchange relationships between metro and rail stations.
-        # Interchange info is in the is_interchange_national_rail field
-        # of metro_stations.json.
-
+        # 5. 建立跨系統轉乘的 INTERCHANGES_WITH 關係 (捷運 <-> 台鐵)
+        # 根據 Schema 約定，加入預設屬性 transfer_time_min: 5
+        session.run("""
+            UNWIND $stations AS s
+            WITH s WHERE s.is_interchange_national_rail = true AND s.interchange_national_rail_station_id IS NOT NULL
+            MATCH (m:MetroStation {station_id: s.station_id})
+            MATCH (n:NationalRailStation {station_id: s.interchange_national_rail_station_id})
+            MERGE (m)-[:INTERCHANGES_WITH {transfer_time_min: 5}]->(n)
+            MERGE (n)-[:INTERCHANGES_WITH {transfer_time_min: 5}]->(m)
+        """, stations=metro_stations)
+        print("  Created INTERCHANGES_WITH relationships (transfer_time_min: 5)")
+        
     driver.close()
     print("\nNeo4j graph seeded successfully.")
     print("   Open http://localhost:7475 to explore the graph.")
