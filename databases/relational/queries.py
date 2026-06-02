@@ -8,16 +8,59 @@ import psycopg2
 import psycopg2.extras
 
 def _connect():
-    """Return a new psycopg2 connection with autocommit enabled."""
+    """
+    Return a new psycopg2 connection with autocommit enabled.
+
+    Args:
+        None.
+
+    Returns:
+        A psycopg2 database connection.
+    """
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = True
     return conn
+
+
 def _gen_booking_id() -> str:
+    """
+    Generate a random booking ID.
+
+    Args:
+        None.
+
+    Returns:
+        Booking ID string in the format BK-XXXXXX.
+    """
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f"BK-{suffix}"
+
+
 def _gen_payment_id() -> str:
+    """
+    Generate a random payment ID.
+
+    Args:
+        None.
+
+    Returns:
+        Payment ID string in the format PM-XXXXXX.
+    """
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f"PM-{suffix}"
+
+
+def _vector_literal(embedding: list[float]) -> str:
+    """
+    Convert an embedding list into pgvector literal syntax.
+
+    Args:
+        embedding: List of numeric embedding values.
+
+    Returns:
+        pgvector-compatible string, e.g. "[0.1,0.2]".
+    """
+    return "[" + ",".join(str(x) for x in embedding) + "]"
 #user profile
 def query_user_profile(user_email: str) -> Optional[dict]:
     """
@@ -446,16 +489,19 @@ def query_national_rail_availability(
     travel_date: Optional[str] = None,
 ) -> list[dict]:
     """
-    Return national rail schedules that serve both origin and destination stations
-    in the correct order, along with seat occupancy for the requested travel date.
+    Return national rail schedules that serve both stations in the correct order.
+
+    When travel_date is provided, booked_seats and available_seats are calculated
+    for that date. When travel_date is None, booked_seats is returned as 0 and
+    available_seats equals total_seats because no specific trip date was given.
 
     Args:
-        origin_id: e.g. "NR01"
-        destination_id: e.g. "NR05"
-        travel_date: e.g. "2025-06-01" — used to count bookings; omit for general info
+        origin_id: Origin national rail station ID, e.g. "NR01".
+        destination_id: Destination national rail station ID, e.g. "NR05".
+        travel_date: Optional travel date in YYYY-MM-DD format.
 
     Returns:
-        List of matching national rail schedules with seat occupancy.
+        List of matching national rail schedules with route, timing, and seat counts.
     """
     sql = """
         SELECT
@@ -479,9 +525,7 @@ def query_national_rail_availability(
                 - os.travel_time_from_origin_min AS travel_time_min,
 
             COUNT(DISTINCT (seat.coach, seat.seat_id)) AS total_seats,
-
             COUNT(DISTINCT b.booking_id) AS booked_seats,
-
             COUNT(DISTINCT (seat.coach, seat.seat_id))
                 - COUNT(DISTINCT b.booking_id) AS available_seats
 
@@ -506,10 +550,11 @@ def query_national_rail_availability(
 
         LEFT JOIN bookings b
             ON b.schedule_id = nrs.schedule_id
-           AND b.travel_date = %s
-           AND b.status <> 'cancelled'
            AND b.coach = seat.coach
            AND b.seat_id = seat.seat_id
+           AND b.status <> 'cancelled'
+           AND %s::date IS NOT NULL
+           AND b.travel_date = %s::date
 
         WHERE os.stop_order < ds.stop_order
 
@@ -541,9 +586,11 @@ def query_national_rail_availability(
         ) as cur:
             cur.execute(
                 sql,
-                (origin_id, destination_id, travel_date)
+                (origin_id, destination_id, travel_date, travel_date),
             )
             return [dict(row) for row in cur.fetchall()]
+
+
 #user booking history query
 def query_user_bookings(user_email: str) -> dict:
     """
@@ -862,32 +909,20 @@ def execute_booking(
         (True, booking_dict) on success.
         (False, error_message) on failure.
     """
+    requested_seat_id = seat_id.strip()
+    requested_seat_key = requested_seat_id.lower()
+
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            selected_seat_id = seat_id
-
-            if seat_id.lower() == "any":
-                available_seats = query_available_seats(
-                    schedule_id=schedule_id,
-                    travel_date=travel_date,
-                    fare_class=fare_class,
-                )
-
-                if not available_seats:
-                    conn.rollback()
-                    return False, "No available seats for this schedule, date, and fare class."
-
-                selected_seat_id = available_seats[0]["seat_id"]
-
             booking_sql = """
                 SELECT
                     nrs.schedule_id,
                     (
-                    nrs.first_train_time
-                    + os.travel_time_from_origin_min * INTERVAL '1 minute'
+                        nrs.first_train_time
+                        + os.travel_time_from_origin_min * INTERVAL '1 minute'
                     ) AS departure_time,
                     nrs.service_type,
 
@@ -922,7 +957,6 @@ def execute_booking(
 
                 JOIN national_rail_seats ns
                     ON ns.schedule_id = nrs.schedule_id
-                   AND ns.seat_id = %s
 
                 JOIN national_rail_coaches c
                     ON c.schedule_id = ns.schedule_id
@@ -933,12 +967,13 @@ def execute_booking(
                     ON b.schedule_id = ns.schedule_id
                    AND b.coach = ns.coach
                    AND b.seat_id = ns.seat_id
-                   AND b.travel_date = %s
+                   AND b.travel_date = %s::date
                    AND b.status <> 'cancelled'
 
                 WHERE nrs.schedule_id = %s
                   AND os.stop_order < ds.stop_order
                   AND b.booking_id IS NULL
+                  AND (%s = 'any' OR ns.seat_id = %s)
 
                 ORDER BY
                     ns.coach,
@@ -946,6 +981,7 @@ def execute_booking(
                     ns.seat_column
 
                 LIMIT 1
+                FOR UPDATE OF ns SKIP LOCKED
             """
 
             cur.execute(
@@ -954,10 +990,11 @@ def execute_booking(
                     origin_station_id,
                     destination_station_id,
                     fare_class,
-                    selected_seat_id,
                     fare_class,
                     travel_date,
                     schedule_id,
+                    requested_seat_key,
+                    requested_seat_id,
                 ),
             )
 
@@ -969,6 +1006,7 @@ def execute_booking(
 
             booking_id = _gen_booking_id()
             payment_id = _gen_payment_id()
+            now = datetime.now(timezone.utc)
 
             insert_booking_sql = """
                 INSERT INTO bookings (
@@ -1010,8 +1048,6 @@ def execute_booking(
                     status,
                     booked_at
             """
-
-            now = datetime.now(timezone.utc)
 
             cur.execute(
                 insert_booking_sql,
@@ -1073,6 +1109,8 @@ def execute_booking(
 
     finally:
         conn.close()
+
+
 #booking cancellation query
 def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | str]:
     """
@@ -1299,6 +1337,13 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
 def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K) -> list[dict]:
     """
     Find the most relevant policy documents for a given query embedding.
+
+    Args:
+        embedding: Query embedding vector.
+        top_k: Maximum number of policy documents to return.
+
+    Returns:
+        List of matching policy document dictionaries with similarity scores.
     """
     sql = """
         SELECT
@@ -1311,10 +1356,14 @@ def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K
         ORDER BY embedding <=> %s::vector
         LIMIT %s
     """
-    vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    vec_str = _vector_literal(embedding)
+
     with _connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (vec_str, vec_str, VECTOR_SIMILARITY_THRESHOLD, vec_str, top_k))
+            cur.execute(
+                sql,
+                (vec_str, vec_str, VECTOR_SIMILARITY_THRESHOLD, vec_str, top_k),
+            )
             return [dict(row) for row in cur.fetchall()]
 
 
@@ -1327,13 +1376,24 @@ def store_policy_document(
 ) -> int:
     """
     Insert a policy document with its embedding into the database.
+
+    Args:
+        title: Policy document title.
+        category: Policy document category.
+        content: Full policy document text.
+        embedding: Embedding vector for semantic search.
+        source_file: Optional source filename.
+
+    Returns:
+        ID of the inserted policy document.
     """
     sql = """
         INSERT INTO policy_documents (title, category, content, embedding, source_file)
         VALUES (%s, %s, %s, %s::vector, %s)
         RETURNING id
     """
-    vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    vec_str = _vector_literal(embedding)
+
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (title, category, content, vec_str, source_file))
