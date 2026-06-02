@@ -101,11 +101,13 @@ def seed():
             MATCH (n:NationalRailStation {station_id: s.interchange_national_rail_station_id})
             MERGE (m)-[:INTERCHANGES_WITH {
                 transfer_time_min: 5,
+                travel_time_min: 5,
                 standard_fare_usd: 0.0,
                 first_class_fare_usd: 0.0
             }]->(n)
             MERGE (n)-[:INTERCHANGES_WITH {
                 transfer_time_min: 5,
+                travel_time_min: 5,
                 standard_fare_usd: 0.0,
                 first_class_fare_usd: 0.0
             }]->(m)
