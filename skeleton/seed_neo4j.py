@@ -94,7 +94,6 @@ def seed():
         """, stations=metro_stations)
         print("  Created INTERCHANGES_WITH relationships (transfer_time_min: 5)")
         
-        
     driver.close()
     print("\nNeo4j graph seeded successfully.")
     print("   Open http://localhost:7475 to explore the graph.")
