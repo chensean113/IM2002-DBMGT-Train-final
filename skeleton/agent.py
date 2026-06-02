@@ -609,6 +609,7 @@ JSON:"""
         tool_calls = llm.ollama_tool_call(
             recent_history, TOOLS, _augmented_message,
             system_prompt=(
+                "Hint: If the user asks about lost property, luggage, or rules, use the search_policy tool."
                 "You are a tool router. Call the right tool based on the user message. "
                 f"Logged-in user: {current_user_email or 'none'}. "
                 "My bookings/tickets/travel history → get_user_bookings (no params). "

@@ -17,6 +17,12 @@
       "refund_rule": "RF003"
     },
     "national_rail": {
+      "group_booking_discount": {
+        "description": "Group booking discounts are available for groups of 10 or more passengers travelling together on national rail services.",
+        "minimum_passengers": 10,
+        "discount_percent": 20,
+        "conditions": "All tickets must be booked in advance in a single transaction. This cannot be combined with other discounts or railcards."
+      },
       "pricing_model": "stops_based_with_fare_class",
       "formula": "amount = base_fare_usd + (stops_travelled × per_stop_rate_usd), rates vary by fare_class and service_type",
       "fare_classes": ["standard", "first"],
@@ -37,6 +43,12 @@
     "available_on": ["national_rail"],
     "description": "A two-leg ticket covering an outbound journey and a return journey on the same route. Each leg is priced and treated independently.",
     "national_rail": {
+      "group_booking_discount": {
+        "description": "Group booking discounts are available for groups of 10 or more passengers travelling together on national rail services.",
+        "minimum_passengers": 10,
+        "discount_percent": 20,
+        "conditions": "All tickets must be booked in advance in a single transaction. This cannot be combined with other discounts or railcards."
+      },
       "pricing_model": "stops_based_per_leg",
       "formula": "total amount = outbound_fare + return_fare (each leg calculated separately using stops-based pricing for the booked fare class)",
       "fare_classes": ["standard", "first"],
