@@ -64,21 +64,29 @@ TransitFlow is a Python-based AI chat assistant for a fictional transit operator
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ------------------------------------------------------------
--- 1. Users and authentication
--- ------------------------------------------------------------
+-- 1. Users 基礎個資表
 CREATE TABLE users (
-  user_id         VARCHAR(10) PRIMARY KEY,
-  email           VARCHAR(255) NOT NULL UNIQUE,
-  first_name      TEXT NOT NULL,
-  surname         TEXT NOT NULL,
-  full_name       TEXT GENERATED ALWAYS AS (trim(first_name || ' ' || surname)) STORED,
-  phone           VARCHAR(20) NOT NULL,
-  date_of_birth   DATE NOT NULL,
-  password        TEXT NOT NULL,
-  secret_question TEXT NOT NULL,
-  secret_answer   TEXT NOT NULL,
-  is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-  registered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id         VARCHAR(10) PRIMARY KEY,
+    email           VARCHAR(255) NOT NULL UNIQUE,
+    full_name       TEXT NOT NULL,
+    phone           VARCHAR(20) NOT NULL,
+    date_of_birth   DATE NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    registered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+--  使用者密碼表 (與 users 表一對一關聯)
+CREATE TABLE user_passwords (
+    user_id         VARCHAR(10) PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    password        TEXT NOT NULL,
+    salt            TEXT
+);
+
+--  使用者安全提示表 (與 users 表一對一關聯)
+CREATE TABLE user_security_questions (
+    user_id         VARCHAR(10) PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    secret_question TEXT NOT NULL,
+    secret_answer   TEXT NOT NULL
 );
 
 -- ------------------------------------------------------------
@@ -453,7 +461,9 @@ def query_station_connections(station_id: str) -> list[dict]: ...
 
 <!-- Add entries as you make decisions. Format: "Decision: X. Why: Y." -->
 
-- [ ] Schema design: TODO — add your table/column decisions here
+* [x] **Schema design (Users):** 為了提升資安層級並隔離敏感資料，我們決定偏離原始的 schema.pdf，將使用者資料拆分為 `users`、`user_passwords` 與 `user_security_questions` 三張表，並新增了 `salt` 欄位供後續密碼雜湊使用。查詢使用者驗證資訊時需透過 `user_id` 進行 JOIN。
+* [x] **Schema design (Foreign Keys):** 針對 metro_stations 與 national_rail_stations 之間的互相轉乘循環依賴，我們使用 `DEFERRABLE INITIALLY DEFERRED` 約束來解決寫入衝突。
+
 - [ ] Graph schema: TODO — add your node label and relationship type decisions here
 - [ ] (example) Metro schedule stop ordering: using `jsonb_array_elements` approach — easier to debug than containment operators
 

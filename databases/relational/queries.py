@@ -3,16 +3,20 @@ import random
 import string
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import bcrypt
 from typing import Optional
 import psycopg2
 import psycopg2.extras
+
 
 def _connect():
     """
     Return a new psycopg2 connection with autocommit enabled.
 
+
     Args:
         None.
+
 
     Returns:
         A psycopg2 database connection.
@@ -22,12 +26,16 @@ def _connect():
     return conn
 
 
+
+
 def _gen_booking_id() -> str:
     """
     Generate a random booking ID.
 
+
     Args:
         None.
+
 
     Returns:
         Booking ID string in the format BK-XXXXXX.
@@ -36,12 +44,16 @@ def _gen_booking_id() -> str:
     return f"BK-{suffix}"
 
 
+
+
 def _gen_payment_id() -> str:
     """
     Generate a random payment ID.
 
+
     Args:
         None.
+
 
     Returns:
         Payment ID string in the format PM-XXXXXX.
@@ -50,12 +62,16 @@ def _gen_payment_id() -> str:
     return f"PM-{suffix}"
 
 
+
+
 def _vector_literal(embedding: list[float]) -> str:
     """
     Convert an embedding list into pgvector literal syntax.
 
+
     Args:
         embedding: List of numeric embedding values.
+
 
     Returns:
         pgvector-compatible string, e.g. "[0.1,0.2]".
@@ -66,8 +82,10 @@ def query_user_profile(user_email: str) -> Optional[dict]:
     """
     Return a user's profile by email.
 
+
     Args:
         user_email: User email address.
+
 
     Returns:
         User profile dictionary or None if not found.
@@ -88,6 +106,7 @@ def query_user_profile(user_email: str) -> Optional[dict]:
         WHERE u.email = %s
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -95,14 +114,18 @@ def query_user_profile(user_email: str) -> Optional[dict]:
             cur.execute(sql, (user_email,))
             row = cur.fetchone()
 
+
             if row is None:
                 return None
 
+
             result = dict(row)
+
 
             name_parts = result["full_name"].split(" ", 1)
             result["first_name"] = name_parts[0]
             result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
+
 
             return result
 #login user
@@ -110,9 +133,11 @@ def login_user(email: str, password: str) -> Optional[dict]:
     """
     Verify credentials.
 
+
     Args:
         email: User email address.
         password: User password.
+
 
     Returns:
         User dictionary on success, None on failure.
@@ -124,30 +149,45 @@ def login_user(email: str, password: str) -> Optional[dict]:
             u.full_name,
             u.phone,
             u.date_of_birth,
-            u.is_active
+            u.is_active,
+            p.password
         FROM users u
         JOIN user_passwords p
             ON p.user_id = u.user_id
         WHERE u.email = %s
-          AND p.password = %s
           AND u.is_active = TRUE
     """
+
 
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
-            cur.execute(sql, (email, password))
+            cur.execute(sql, (email,))
             row = cur.fetchone()
+
 
             if row is None:
                 return None
 
+
+            stored_password = row["password"]
+            if isinstance(stored_password, str):
+                stored_password = stored_password.encode("utf-8")
+
+
+            if not bcrypt.checkpw(password.encode("utf-8"), stored_password):
+                return None
+
+
             result = dict(row)
+            result.pop("password", None)
+
 
             name_parts = result["full_name"].split(" ", 1)
             result["first_name"] = name_parts[0]
             result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
+
 
             return result
 #user secret question
@@ -155,8 +195,10 @@ def get_user_secret_question(email: str) -> Optional[str]:
     """
     Return the secret question for a registered email, or None if not found.
 
+
     Args:
         email: User email address.
+
 
     Returns:
         Secret question string or None.
@@ -169,13 +211,16 @@ def get_user_secret_question(email: str) -> Optional[str]:
         WHERE u.email = %s
     """
 
+
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (email,))
             row = cur.fetchone()
 
+
             if row is None:
                 return None
+
 
             return row[0]
 #verify user secret answer
@@ -183,9 +228,11 @@ def verify_secret_answer(email: str, answer: str) -> bool:
     """
     Return True if the provided answer matches the stored secret answer.
 
+
     Args:
         email: User email address.
         answer: Answer provided by user.
+
 
     Returns:
         True if answer matches, otherwise False.
@@ -198,15 +245,19 @@ def verify_secret_answer(email: str, answer: str) -> bool:
         WHERE u.email = %s
     """
 
+
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (email,))
             row = cur.fetchone()
 
+
             if row is None:
                 return False
 
+
             stored_answer = row[0]
+
 
             return stored_answer.strip().lower() == answer.strip().lower()
 #update user password
@@ -214,27 +265,50 @@ def update_password(email: str, new_password: str) -> bool:
     """
     Update the password for a user.
 
+
     Args:
         email: User email address.
         new_password: New password.
 
+
     Returns:
         True if updated successfully, False otherwise.
     """
+    salt = bcrypt.gensalt(rounds=12)
+    hashed_password = bcrypt.hashpw(
+        new_password.encode("utf-8"),
+        salt,
+    ).decode("utf-8")
+
+
     sql = """
-        UPDATE user_passwords
-        SET password = %s
-        WHERE user_id = (
-            SELECT user_id
-            FROM users
-            WHERE email = %s
-        )
+        UPDATE user_passwords p
+                SET password = %s,
+                        salt = %s
+        FROM users u
+        WHERE p.user_id = u.user_id
+          AND u.email = %s
     """
 
-    with _connect() as conn:
+
+    conn = psycopg2.connect(PG_DSN)
+    conn.autocommit = False
+
+
+    try:
         with conn.cursor() as cur:
-            cur.execute(sql, (new_password, email))
-            return cur.rowcount > 0
+            cur.execute(sql, (hashed_password, salt.decode("utf-8"), email))
+            updated = cur.rowcount > 0
+            if updated:
+                conn.commit()
+            else:
+                conn.rollback()
+            return updated
+    except psycopg2.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 #metro fare calculation
 def query_metro_fare(
     schedule_id: str,
@@ -243,9 +317,11 @@ def query_metro_fare(
     """
     Calculate the metro fare for a single-ticket journey.
 
+
     Args:
         schedule_id: e.g. "MS_SCH01"
         stops_travelled: number of stops between origin and destination
+
 
     Returns:
         dict with base_fare_usd, per_stop_rate_usd, total_fare_usd
@@ -259,6 +335,7 @@ def query_metro_fare(
         WHERE schedule_id = %s
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -266,18 +343,23 @@ def query_metro_fare(
             cur.execute(sql, (schedule_id,))
             row = cur.fetchone()
 
+
             if row is None:
                 return None
 
+
             result = dict(row)
+
 
             total_fare = (
                 float(result["base_fare_usd"])
                 + float(result["per_stop_rate_usd"]) * stops_travelled
             )
 
+
             result["stops_travelled"] = stops_travelled
             result["total_fare_usd"] = round(total_fare, 2)
+
 
             return result
 #national rail fare calculation
@@ -289,10 +371,12 @@ def query_national_rail_fare(
     """
     Calculate the fare for a national rail journey.
 
+
     Args:
         schedule_id: e.g. "NR_SCH01"
         fare_class: "standard" or "first"
         stops_travelled: number of stops travelled
+
 
     Returns:
         dict with fare_class, base_fare_usd,
@@ -309,6 +393,7 @@ def query_national_rail_fare(
           AND fare_class = %s
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -318,20 +403,26 @@ def query_national_rail_fare(
                 (schedule_id, fare_class)
             )
 
+
             row = cur.fetchone()
+
 
             if row is None:
                 return None
 
+
             result = dict(row)
+
 
             total_fare = (
                 float(result["base_fare_usd"])
                 + float(result["per_stop_rate_usd"]) * stops_travelled
             )
 
+
             result["stops_travelled"] = stops_travelled
             result["total_fare_usd"] = round(total_fare, 2)
+
 
             return result
 #available seats query
@@ -341,12 +432,12 @@ def query_available_seats(
     fare_class: str,
 ) -> list[dict]:
     """
-    Return available seats for a national rail journey on a given date.
-
+                                hashed_password,
     Args:
         schedule_id: e.g. "NR_SCH01"
         travel_date: e.g. "2025-06-01"
         fare_class: "standard" or "first"
+
 
     Returns:
         List of dicts: {seat_id, coach, row, column}
@@ -376,6 +467,7 @@ def query_available_seats(
             s.seat_column
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -389,9 +481,11 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
     """
     Select `count` seats that are as close together as possible.
 
+
     Args:
         available_seats: output of query_available_seats()
         count: number of seats needed
+
 
     Returns:
         List of selected seat IDs.
@@ -399,15 +493,20 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
     if not available_seats or count <= 0:
         return []
 
+
     if count >= len(available_seats):
         return [seat["seat_id"] for seat in available_seats[:count]]
 
+
     from collections import defaultdict
+
 
     seats_by_row: dict[tuple[str, int], list[dict]] = defaultdict(list)
 
+
     for seat in available_seats:
         seats_by_row[(seat["coach"], seat["row"])].append(seat)
+
 
     for row_key in sorted(seats_by_row.keys(), key=lambda x: (x[0], x[1])):
         row_seats = sorted(
@@ -415,8 +514,10 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
             key=lambda seat: seat["column"]
         )
 
+
         if len(row_seats) >= count:
             return [seat["seat_id"] for seat in row_seats[:count]]
+
 
     sorted_seats = sorted(
         available_seats,
@@ -427,6 +528,7 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
         )
     )
 
+
     return [seat["seat_id"] for seat in sorted_seats[:count]]
 #metro schedules query
 def query_metro_schedules(origin_id: str, destination_id: str) -> list[dict]:
@@ -434,9 +536,11 @@ def query_metro_schedules(origin_id: str, destination_id: str) -> list[dict]:
     Return metro schedules that serve both origin and destination
     in the correct order.
 
+
     Args:
         origin_id: e.g. "MS01"
         destination_id: e.g. "MS09"
+
 
     Returns:
         List of matching metro schedules.
@@ -476,6 +580,7 @@ def query_metro_schedules(origin_id: str, destination_id: str) -> list[dict]:
             ms.first_train_time
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -491,14 +596,17 @@ def query_national_rail_availability(
     """
     Return national rail schedules that serve both stations in the correct order.
 
+
     When travel_date is provided, booked_seats and available_seats are calculated
     for that date. When travel_date is None, booked_seats is returned as 0 and
     available_seats equals total_seats because no specific trip date was given.
+
 
     Args:
         origin_id: Origin national rail station ID, e.g. "NR01".
         destination_id: Destination national rail station ID, e.g. "NR05".
         travel_date: Optional travel date in YYYY-MM-DD format.
+
 
     Returns:
         List of matching national rail schedules with route, timing, and seat counts.
@@ -517,36 +625,46 @@ def query_national_rail_availability(
             nrs.last_train_time::text AS last_train_time,
             nrs.frequency_min,
 
+
             os.stop_order AS origin_stop_order,
             ds.stop_order AS destination_stop_order,
             ds.stop_order - os.stop_order AS stops_travelled,
 
+
             ds.travel_time_from_origin_min
                 - os.travel_time_from_origin_min AS travel_time_min,
+
 
             COUNT(DISTINCT (seat.coach, seat.seat_id)) AS total_seats,
             COUNT(DISTINCT b.booking_id) AS booked_seats,
             COUNT(DISTINCT (seat.coach, seat.seat_id))
                 - COUNT(DISTINCT b.booking_id) AS available_seats
 
+
         FROM national_rail_schedules nrs
+
 
         JOIN national_rail_schedule_stops os
             ON os.schedule_id = nrs.schedule_id
            AND os.station_id = %s
 
+
         JOIN national_rail_schedule_stops ds
             ON ds.schedule_id = nrs.schedule_id
            AND ds.station_id = %s
 
+
         JOIN national_rail_stations origin_station
             ON origin_station.station_id = os.station_id
+
 
         JOIN national_rail_stations destination_station
             ON destination_station.station_id = ds.station_id
 
+
         LEFT JOIN national_rail_seats seat
             ON seat.schedule_id = nrs.schedule_id
+
 
         LEFT JOIN bookings b
             ON b.schedule_id = nrs.schedule_id
@@ -556,7 +674,9 @@ def query_national_rail_availability(
            AND %s::date IS NOT NULL
            AND b.travel_date = %s::date
 
+
         WHERE os.stop_order < ds.stop_order
+
 
         GROUP BY
             nrs.schedule_id,
@@ -580,6 +700,7 @@ def query_national_rail_availability(
             nrs.first_train_time
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -591,13 +712,17 @@ def query_national_rail_availability(
             return [dict(row) for row in cur.fetchall()]
 
 
+
+
 #user booking history query
 def query_user_bookings(user_email: str) -> dict:
     """
     Return a user's combined booking history.
 
+
     Args:
         user_email: user's email address
+
 
     Returns:
         dict with keys 'national_rail' and 'metro'
@@ -617,16 +742,20 @@ def query_user_bookings(user_email: str) -> dict:
             b.booked_at,
             b.travelled_at,
 
+
             nrs.schedule_id,
             nrs.line,
             nrs.service_type,
             nrs.direction,
 
+
             orig.station_id AS origin_station_id,
             orig.name AS origin_name,
 
+
             dest.station_id AS destination_station_id,
             dest.name AS destination_name
+
 
         FROM users u
         JOIN bookings b
@@ -638,13 +767,16 @@ def query_user_bookings(user_email: str) -> dict:
         JOIN national_rail_stations dest
             ON dest.station_id = b.destination_station_id
 
+
         WHERE u.email = %s
+
 
         ORDER BY
             b.travel_date DESC,
             b.departure_time DESC,
             b.booked_at DESC
     """
+
 
     metro_sql = """
         SELECT
@@ -658,15 +790,19 @@ def query_user_bookings(user_email: str) -> dict:
             mth.purchased_at,
             mth.travelled_at,
 
+
             ms.schedule_id,
             ms.line,
             ms.direction,
 
+
             orig.station_id AS origin_station_id,
             orig.name AS origin_name,
 
+
             dest.station_id AS destination_station_id,
             dest.name AS destination_name
+
 
         FROM users u
         JOIN metro_travel_history mth
@@ -678,13 +814,16 @@ def query_user_bookings(user_email: str) -> dict:
         JOIN metro_stations dest
             ON dest.station_id = mth.destination_station_id
 
+
         WHERE u.email = %s
+
 
         ORDER BY
             mth.travel_date DESC,
             mth.travelled_at DESC NULLS LAST,
             mth.purchased_at DESC NULLS LAST
     """
+
 
     with _connect() as conn:
         with conn.cursor(
@@ -693,8 +832,10 @@ def query_user_bookings(user_email: str) -> dict:
             cur.execute(national_rail_sql, (user_email,))
             national_rail = [dict(row) for row in cur.fetchall()]
 
+
             cur.execute(metro_sql, (user_email,))
             metro = [dict(row) for row in cur.fetchall()]
+
 
             return {
                 "national_rail": national_rail,
@@ -705,8 +846,10 @@ def query_payment_info(booking_id: str) -> Optional[dict]:
     """
     Return payment record for a booking or metro trip.
 
+
     Args:
         booking_id: booking_id or trip_id, e.g. "BK001" or "MT001"
+
 
     Returns:
         Payment dictionary or None if not found.
@@ -725,6 +868,7 @@ def query_payment_info(booking_id: str) -> Optional[dict]:
         LIMIT 1
     """
 
+
     with _connect() as conn:
         with conn.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
@@ -732,8 +876,10 @@ def query_payment_info(booking_id: str) -> Optional[dict]:
             cur.execute(sql, (booking_id,))
             row = cur.fetchone()
 
+
             if row is None:
                 return None
+
 
             return dict(row)
 #user registration query
@@ -749,6 +895,7 @@ def register_user(
     """
     Register a new user.
 
+
     Args:
         email: User email address.
         first_name: User first name.
@@ -758,6 +905,7 @@ def register_user(
         secret_question: Password recovery question.
         secret_answer: Password recovery answer.
 
+
     Returns:
         (True, user_id) on success.
         (False, error_message) on failure.
@@ -766,17 +914,22 @@ def register_user(
     first_name = first_name.strip()
     surname = surname.strip()
     full_name = f"{first_name} {surname}".strip()
+    password = password.strip()
     secret_question = secret_question.strip()
     secret_answer = secret_answer.strip()
+
 
     if not email:
         return False, "Email is required."
 
+
     if not full_name:
         return False, "Full name is required."
 
+
     if not password:
         return False, "Password is required."
+
 
     try:
         parsed_date_of_birth = datetime.strptime(
@@ -786,8 +939,17 @@ def register_user(
     except ValueError:
         return False, "year_of_birth must be a valid year."
 
+
+    salt = bcrypt.gensalt(rounds=12)
+    hashed_password = bcrypt.hashpw(
+        password.encode("utf-8"),
+        salt,
+    ).decode("utf-8")
+
+
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
+
 
     try:
         with conn.cursor() as cur:
@@ -800,9 +962,11 @@ def register_user(
                 (email,),
             )
 
+
             if cur.fetchone() is not None:
                 conn.rollback()
                 return False, "Email is already registered."
+
 
             for _ in range(10):
                 user_id = "RU" + "".join(
@@ -811,6 +975,7 @@ def register_user(
                         k=6
                     )
                 )
+
 
                 try:
                     cur.execute(
@@ -833,6 +998,7 @@ def register_user(
                         ),
                     )
 
+
                     cur.execute(
                         """
                         INSERT INTO user_passwords (
@@ -844,10 +1010,11 @@ def register_user(
                         """,
                         (
                             user_id,
-                            password,
-                            None,
+                            hashed_password,
+                            salt.decode("utf-8"),
                         ),
                     )
+
 
                     cur.execute(
                         """
@@ -865,19 +1032,24 @@ def register_user(
                         ),
                     )
 
+
                     conn.commit()
                     return True, user_id
+
 
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
                     continue
 
+
             conn.rollback()
             return False, "Could not generate a unique user ID."
+
 
     except psycopg2.Error as e:
         conn.rollback()
         return False, f"Database error: {e}"
+
 
     finally:
         conn.close()
@@ -895,6 +1067,7 @@ def execute_booking(
     """
     Create a national rail booking for a logged-in user.
 
+
     Args:
         user_id: User ID, e.g. "RU01".
         schedule_id: National rail schedule ID, e.g. "NR_SCH01".
@@ -905,6 +1078,7 @@ def execute_booking(
         seat_id: Seat ID, or "any" to auto-select the first available seat.
         ticket_type: Ticket type, default is "single".
 
+
     Returns:
         (True, booking_dict) on success.
         (False, error_message) on failure.
@@ -912,8 +1086,10 @@ def execute_booking(
     requested_seat_id = seat_id.strip()
     requested_seat_key = requested_seat_id.lower()
 
+
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
+
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -926,12 +1102,15 @@ def execute_booking(
                     ) AS departure_time,
                     nrs.service_type,
 
+
                     os.stop_order AS origin_stop_order,
                     ds.stop_order AS destination_stop_order,
                     ds.stop_order - os.stop_order AS stops_travelled,
 
+
                     ns.coach,
                     ns.seat_id,
+
 
                     f.fare_class,
                     f.base_fare_usd,
@@ -941,27 +1120,34 @@ def execute_booking(
                         + f.per_stop_rate_usd * (ds.stop_order - os.stop_order)
                     ) AS amount_usd
 
+
                 FROM national_rail_schedules nrs
+
 
                 JOIN national_rail_schedule_stops os
                     ON os.schedule_id = nrs.schedule_id
                    AND os.station_id = %s
 
+
                 JOIN national_rail_schedule_stops ds
                     ON ds.schedule_id = nrs.schedule_id
                    AND ds.station_id = %s
+
 
                 JOIN national_rail_schedule_fares f
                     ON f.schedule_id = nrs.schedule_id
                    AND f.fare_class = %s
 
+
                 JOIN national_rail_seats ns
                     ON ns.schedule_id = nrs.schedule_id
+
 
                 JOIN national_rail_coaches c
                     ON c.schedule_id = ns.schedule_id
                    AND c.coach = ns.coach
                    AND c.fare_class = %s
+
 
                 LEFT JOIN bookings b
                     ON b.schedule_id = ns.schedule_id
@@ -970,19 +1156,23 @@ def execute_booking(
                    AND b.travel_date = %s::date
                    AND b.status <> 'cancelled'
 
+
                 WHERE nrs.schedule_id = %s
                   AND os.stop_order < ds.stop_order
                   AND b.booking_id IS NULL
                   AND (%s = 'any' OR ns.seat_id = %s)
+
 
                 ORDER BY
                     ns.coach,
                     ns.row_number,
                     ns.seat_column
 
+
                 LIMIT 1
                 FOR UPDATE OF ns SKIP LOCKED
             """
+
 
             cur.execute(
                 booking_sql,
@@ -998,15 +1188,19 @@ def execute_booking(
                 ),
             )
 
+
             booking_info = cur.fetchone()
+
 
             if booking_info is None:
                 conn.rollback()
                 return False, "No valid available seat found for this journey."
 
+
             booking_id = _gen_booking_id()
             payment_id = _gen_payment_id()
             now = datetime.now(timezone.utc)
+
 
             insert_booking_sql = """
                 INSERT INTO bookings (
@@ -1049,6 +1243,7 @@ def execute_booking(
                     booked_at
             """
 
+
             cur.execute(
                 insert_booking_sql,
                 (
@@ -1070,7 +1265,9 @@ def execute_booking(
                 ),
             )
 
+
             booking_row = dict(cur.fetchone())
+
 
             insert_payment_sql = """
                 INSERT INTO payments (
@@ -1084,6 +1281,7 @@ def execute_booking(
                 VALUES (%s, %s, %s, %s, %s, %s)
             """
 
+
             cur.execute(
                 insert_payment_sql,
                 (
@@ -1096,19 +1294,25 @@ def execute_booking(
                 ),
             )
 
+
             conn.commit()
             return True, booking_row
+
 
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
         return False, "Seat is already booked or generated ID already exists."
 
+
     except psycopg2.Error as e:
         conn.rollback()
         return False, f"Database error: {e}"
 
+
     finally:
         conn.close()
+
+
 
 
 #booking cancellation query
@@ -1116,13 +1320,16 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
     """
     Cancel a national rail booking owned by the given user.
 
+
     Calculates the refund amount according to the booking's service type:
       - Normal service: RF001 windows (100% / 75% / 50% / 0%)
       - Express service: RF002 windows (100% / 50% / 0%)
 
+
     Args:
         booking_id: e.g. "BK001"
         user_id: must match the booking's user_id
+
 
     Returns:
         (True, result_dict) with refund_amount_usd and policy note.
@@ -1130,6 +1337,7 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
     """
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
+
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -1163,27 +1371,34 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 FOR UPDATE
             """
 
+
             cur.execute(booking_sql, (booking_id, user_id))
             booking = cur.fetchone()
+
 
             if booking is None:
                 conn.rollback()
                 return False, "Booking not found or does not belong to this user."
 
+
             if booking["status"] == "cancelled":
                 conn.rollback()
                 return False, "Booking is already cancelled."
+
 
             departure_datetime = datetime.combine(
                 booking["travel_date"],
                 booking["departure_time"],
             ).replace(tzinfo=timezone.utc)
 
+
             now = datetime.now(timezone.utc)
+
 
             hours_before_departure = Decimal(
                 str((departure_datetime - now).total_seconds() / 3600)
             )
+
 
             policy_sql = """
                 SELECT
@@ -1220,6 +1435,7 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 LIMIT 1
             """
 
+
             cur.execute(
                 policy_sql,
                 (
@@ -1230,7 +1446,9 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 ),
             )
 
+
             policy = cur.fetchone()
+
 
             if policy is not None:
                 refund_percent = Decimal(policy["refund_percent"])
@@ -1240,11 +1458,13 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 window_label = policy["window_label"]
                 policy_note = policy["window_condition"]
 
+
             else:
                 service_type = booking["service_type"]
                 policy_id = "fallback"
                 policy_label = "Fallback cancellation policy"
                 admin_fee_usd = Decimal("0.00")
+
 
                 if service_type == "express":
                     if hours_before_departure >= Decimal("24"):
@@ -1256,6 +1476,7 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                     else:
                         refund_percent = Decimal("0")
                         window_label = "Less than 4 hours before departure"
+
 
                 else:
                     if hours_before_departure >= Decimal("24"):
@@ -1271,22 +1492,28 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                         refund_percent = Decimal("0")
                         window_label = "Less than 2 hours before departure"
 
+
                 policy_note = "Refund calculated using fallback policy because no matching database policy window was found."
 
+
             original_amount = Decimal(booking["amount_usd"])
+
 
             refund_amount = (
                 original_amount * refund_percent / Decimal("100")
                 - admin_fee_usd
             )
 
+
             if refund_amount < Decimal("0.00"):
                 refund_amount = Decimal("0.00")
+
 
             refund_amount = refund_amount.quantize(
                 Decimal("0.01"),
                 rounding=ROUND_HALF_UP,
             )
+
 
             update_sql = """
                 UPDATE bookings
@@ -1309,10 +1536,13 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                     status
             """
 
+
             cur.execute(update_sql, (booking_id, user_id))
             updated_booking = dict(cur.fetchone())
 
+
             conn.commit()
+
 
             return True, {
                 "booking": updated_booking,
@@ -1328,9 +1558,11 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 "policy_note": policy_note,
             }
 
+
     except psycopg2.Error as e:
         conn.rollback()
         return False, f"Database error: {e}"
+
 
     finally:
         conn.close()
@@ -1338,9 +1570,11 @@ def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K
     """
     Find the most relevant policy documents for a given query embedding.
 
+
     Args:
         embedding: Query embedding vector.
         top_k: Maximum number of policy documents to return.
+
 
     Returns:
         List of matching policy document dictionaries with similarity scores.
@@ -1358,6 +1592,7 @@ def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K
     """
     vec_str = _vector_literal(embedding)
 
+
     with _connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -1365,6 +1600,8 @@ def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K
                 (vec_str, vec_str, VECTOR_SIMILARITY_THRESHOLD, vec_str, top_k),
             )
             return [dict(row) for row in cur.fetchall()]
+
+
 
 
 def store_policy_document(
@@ -1377,12 +1614,14 @@ def store_policy_document(
     """
     Insert a policy document with its embedding into the database.
 
+
     Args:
         title: Policy document title.
         category: Policy document category.
         content: Full policy document text.
         embedding: Embedding vector for semantic search.
         source_file: Optional source filename.
+
 
     Returns:
         ID of the inserted policy document.
@@ -1393,6 +1632,7 @@ def store_policy_document(
         RETURNING id
     """
     vec_str = _vector_literal(embedding)
+
 
     with _connect() as conn:
         with conn.cursor() as cur:
