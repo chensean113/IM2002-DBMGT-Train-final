@@ -76,54 +76,20 @@ def query_shortest_route(
         MATCH (origin), (destination)
         WHERE origin.station_id = $origin_id
           AND destination.station_id = $destination_id
-          AND (
-                origin:MetroStation
-                OR origin:NationalRailStation
-              )
-          AND (
-                destination:MetroStation
-                OR destination:NationalRailStation
-              )
-          AND (
-                $network = 'auto'
-                OR ($network = 'metro'
-                    AND origin:MetroStation
-                    AND destination:MetroStation)
-                OR ($network IN ['rail', 'national_rail']
-                    AND origin:NationalRailStation
-                    AND destination:NationalRailStation)
-              )
-
-        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination)
-
-        WHERE
-            $network = 'auto'
-            OR (
-                $network = 'metro'
-                AND all(n IN nodes(path) WHERE n:MetroStation)
-                AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
-            )
-            OR (
-                $network IN ['rail', 'national_rail']
-                AND all(n IN nodes(path) WHERE n:NationalRailStation)
-                AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
-            )
-
-        WITH
-            path,
-            reduce(
-                total = 0,
-                r IN relationships(path) |
-                total +
-                coalesce(r.travel_time_min, r.transfer_time_min, 0)
-            ) AS total_time_min
-
-        ORDER BY total_time_min ASC, length(path) ASC
-        LIMIT 1
-
-        RETURN
-            total_time_min,
-            nodes(path) AS path_nodes,
+          AND (origin:MetroStation OR origin:NationalRailStation)
+          AND (destination:MetroStation OR destination:NationalRailStation)
+        
+        // 呼叫 APOC Dijkstra 演算法 (以 travel_time_min 作為權重)
+        CALL apoc.algo.dijkstra(
+            origin, 
+            destination, 
+            'CONNECTED_TO|INTERCHANGES_WITH', 
+            'travel_time_min'
+        ) YIELD path, weight AS total_time_min
+        
+        RETURN 
+            total_time_min, 
+            nodes(path) AS path_nodes, 
             relationships(path) AS path_relationships
     """
 
@@ -237,90 +203,36 @@ def query_cheapest_route(
         MATCH (origin), (destination)
         WHERE origin.station_id = $origin_id
           AND destination.station_id = $destination_id
-          AND (
-                origin:MetroStation
-                OR origin:NationalRailStation
-              )
-          AND (
-                destination:MetroStation
-                OR destination:NationalRailStation
-              )
-          AND (
-                $network = 'auto'
-                OR (
-                    $network = 'metro'
-                    AND origin:MetroStation
-                    AND destination:MetroStation
-                )
-                OR (
-                    $network IN ['rail', 'national_rail']
-                    AND origin:NationalRailStation
-                    AND destination:NationalRailStation
-                )
-              )
-
-        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination)
-
-        WHERE
-            $network = 'auto'
-            OR (
-                $network = 'metro'
-                AND all(n IN nodes(path) WHERE n:MetroStation)
-                AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
-            )
-            OR (
-                $network IN ['rail', 'national_rail']
-                AND all(n IN nodes(path) WHERE n:NationalRailStation)
-                AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
-            )
-
-        WITH
-            path,
-            nodes(path) AS path_nodes,
+          AND (origin:MetroStation OR origin:NationalRailStation)
+          AND (destination:MetroStation OR destination:NationalRailStation)
+        
+        // 根據使用者選擇的艙等，動態決定要讀取哪一個票價屬性
+        WITH origin, destination,
+             CASE WHEN $fare_class = 'first' THEN 'first_class_fare_usd' 
+                  ELSE 'standard_fare_usd' 
+             END AS weight_property
+        
+        // 呼叫 APOC Dijkstra 演算法 (以票價作為權重)
+        CALL apoc.algo.dijkstra(
+            origin, 
+            destination, 
+            'CONNECTED_TO|INTERCHANGES_WITH', 
+            weight_property
+        ) YIELD path, weight AS total_fare_usd
+        
+        // 算出這條最便宜路線的總行駛時間
+        WITH path, total_fare_usd,
+             reduce(
+                 total = 0, 
+                 r IN relationships(path) | 
+                 total + coalesce(r.travel_time_min, r.transfer_time_min, 0)
+             ) AS total_time_min
+        
+        RETURN 
+            total_fare_usd, 
+            total_time_min, 
+            nodes(path) AS path_nodes, 
             relationships(path) AS path_relationships
-
-        WITH
-            path,
-            path_nodes,
-            path_relationships,
-            reduce(
-                total = 0.0,
-                i IN range(0, size(path_relationships) - 1) |
-                total +
-                CASE
-                    WHEN type(path_relationships[i]) = 'INTERCHANGES_WITH'
-                    THEN 0.0
-
-                    WHEN path_nodes[i]:MetroStation
-                         AND path_nodes[i + 1]:MetroStation
-                    THEN 0.30
-
-                    WHEN path_nodes[i]:NationalRailStation
-                         AND path_nodes[i + 1]:NationalRailStation
-                         AND $fare_class = 'first'
-                    THEN 3.00
-
-                    WHEN path_nodes[i]:NationalRailStation
-                         AND path_nodes[i + 1]:NationalRailStation
-                    THEN 1.50
-
-                    ELSE 0.0
-                END
-            ) AS total_fare_usd,
-            reduce(
-                total = 0,
-                r IN path_relationships |
-                total + coalesce(r.travel_time_min, r.transfer_time_min, 0)
-            ) AS total_time_min
-
-        ORDER BY total_fare_usd ASC, total_time_min ASC, length(path) ASC
-        LIMIT 1
-
-        RETURN
-            total_fare_usd,
-            total_time_min,
-            path_nodes,
-            path_relationships
     """
 
     with _driver() as driver:
@@ -481,7 +393,7 @@ def query_alternative_routes(
                     AND destination:NationalRailStation)
               )
 
-        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination)
+        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..8]-(destination)
 
         WHERE none(n IN nodes(path) WHERE n.station_id = $avoid_station_id)
 
@@ -620,7 +532,7 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
                 OR destination:NationalRailStation
               )
 
-        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination)
+        MATCH path = shortestPath((origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination))
 
         WHERE any(
             r IN relationships(path)

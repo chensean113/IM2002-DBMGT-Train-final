@@ -68,7 +68,12 @@ def seed():
             MATCH (a:MetroStation {station_id: s.station_id})
             UNWIND s.adjacent_stations AS adj
             MATCH (b:MetroStation {station_id: adj.station_id})
-            MERGE (a)-[r:CONNECTED_TO {line: adj.line, travel_time_min: adj.travel_time_min}]->(b)
+            MERGE (a)-[r:CONNECTED_TO {
+                line: adj.line,
+                travel_time_min: adj.travel_time_min,
+                standard_fare_usd: 0.30,
+                first_class_fare_usd: 0.30
+            }]->(b)
         """, stations=metro_stations)
         print("  Created Metro CONNECTED_TO relationships")
 
@@ -78,7 +83,12 @@ def seed():
             MATCH (a:NationalRailStation {station_id: s.station_id})
             UNWIND s.adjacent_stations AS adj
             MATCH (b:NationalRailStation {station_id: adj.station_id})
-            MERGE (a)-[r:CONNECTED_TO {line: adj.line, travel_time_min: adj.travel_time_min}]->(b)
+            MERGE (a)-[r:CONNECTED_TO {
+                line: adj.line, 
+                travel_time_min: adj.travel_time_min,
+                standard_fare_usd: 1.50,
+                first_class_fare_usd: 3.00
+            }]->(b)
         """, stations=rail_stations)
         print("  Created National Rail CONNECTED_TO relationships")
 
@@ -89,8 +99,16 @@ def seed():
             WITH s WHERE s.is_interchange_national_rail = true AND s.interchange_national_rail_station_id IS NOT NULL
             MATCH (m:MetroStation {station_id: s.station_id})
             MATCH (n:NationalRailStation {station_id: s.interchange_national_rail_station_id})
-            MERGE (m)-[:INTERCHANGES_WITH {transfer_time_min: 5}]->(n)
-            MERGE (n)-[:INTERCHANGES_WITH {transfer_time_min: 5}]->(m)
+            MERGE (m)-[:INTERCHANGES_WITH {
+                transfer_time_min: 5,
+                standard_fare_usd: 0.0,
+                first_class_fare_usd: 0.0
+            }]->(n)
+            MERGE (n)-[:INTERCHANGES_WITH {
+                transfer_time_min: 5,
+                standard_fare_usd: 0.0,
+                first_class_fare_usd: 0.0
+            }]->(m)
         """, stations=metro_stations)
         print("  Created INTERCHANGES_WITH relationships (transfer_time_min: 5)")
         
