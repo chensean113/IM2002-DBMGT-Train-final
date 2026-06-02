@@ -5,30 +5,23 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ------------------------------------------------------------
--- 1. Users 基礎個資表
+-- 1. Users and authentication
+-- ------------------------------------------------------------
 CREATE TABLE users (
     user_id         VARCHAR(10) PRIMARY KEY,
     email           VARCHAR(255) NOT NULL UNIQUE,
-    full_name       TEXT NOT NULL,
+    first_name      TEXT NOT NULL,
+    surname         TEXT NOT NULL,
+    full_name       TEXT GENERATED ALWAYS AS (trim(first_name || ' ' || surname)) STORED,
     phone           VARCHAR(20) NOT NULL,
     date_of_birth   DATE NOT NULL,
+    password        TEXT NOT NULL,
+    secret_question TEXT NOT NULL,
+    secret_answer   TEXT NOT NULL,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     registered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
---  使用者密碼表 (與 users 表一對一關聯)
-CREATE TABLE user_passwords (
-    user_id         VARCHAR(10) PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
-    password        TEXT NOT NULL,
-    salt            TEXT
-);
-
---  使用者安全提示表 (與 users 表一對一關聯)
-CREATE TABLE user_security_questions (
-    user_id         VARCHAR(10) PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
-    secret_question TEXT NOT NULL,
-    secret_answer   TEXT NOT NULL
-);
 -- ------------------------------------------------------------
 -- 2. Station master data
 -- ------------------------------------------------------------
