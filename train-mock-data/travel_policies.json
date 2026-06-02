@@ -2,6 +2,12 @@
   "version": "1.0",
   "last_updated": "2024-01-01",
   "metro": {
+    "lost_property": {
+      "description": "All items found on trains or at stations are handed over to the Lost Property Office at Central Station.",
+      "retention_period_days": 90,
+      "admin_fee_usd": 5.00,
+      "perishable_items_rule": "Perishable items will be disposed of at the end of the day."
+    },
     "bicycles": {
       "foldable_bicycles": {
         "permitted": true,
