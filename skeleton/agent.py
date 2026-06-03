@@ -54,6 +54,7 @@ from databases.graph.queries import (
     query_alternative_routes,
     query_interchange_path,
     query_delay_ripple,
+    query_station_connections
 )
 
 
@@ -272,6 +273,39 @@ TOOLS = [
         },
         "required": ["station_id"],
     },
+    {
+        "name": "get_payment_info",
+        "description": "Look up the latest payment record for a booking or metro trip.",
+        "parameters": {
+            "booking_id": {"type": "string", "description": "Booking reference or trip reference, e.g. BK001 or MT001"},
+        },
+        "required": ["booking_id"],
+    },
+    {
+        "name": "get_station_connections",
+        "description": "List all direct connections and lines from a given station.",
+        "parameters": {
+            "station_id": {"type": "string", "description": "Station ID e.g. MS01 or NR01"},
+        },
+        "required": ["station_id"],
+    },
+    {
+        "name": "find_adjacent_seats",
+        "description": "Suggest a set of seats that are close together for a group booking.",
+        "parameters": {
+            "schedule_id":  {"type": "string", "description": "e.g. NR_SCH01"},
+            "travel_date":  {"type": "string", "description": "YYYY-MM-DD"},
+            "fare_class":   {"type": "string", "description": "standard or first"},
+            "count":        {"type": "integer", "description": "Number of seats needed"},
+        },
+        "required": ["schedule_id", "travel_date", "fare_class", "count"],
+    },
+    {
+        "name": "get_my_profile",
+        "description": "Retrieve the personal profile information for the currently logged-in user.",
+        "parameters": {},
+        "required": [],
+    },
 ]
 
 TOOLS_SCHEMA = """\
@@ -284,9 +318,13 @@ get_available_seats(schedule_id, travel_date, fare_class)
 make_booking(schedule_id, origin_station_id, destination_station_id, travel_date, fare_class, seat_id, ticket_type?)
 cancel_booking(booking_id)
 get_user_bookings()
+get_payment_info(booking_id)
 search_policy(query)
 find_alternative_routes(origin_id, destination_id, avoid_station_id, network?)
-get_delay_ripple(station_id, hops?)"""
+get_delay_ripple(station_id, hops?)
+get_station_connections(station_id)
+find_adjacent_seats(schedule_id, travel_date, fare_class, count)
+get_my_profile()"""
 
 
 # ── Agent logic ───────────────────────────────────────────────────────────────
@@ -347,6 +385,11 @@ def _execute_tool(
             if not current_user_email:
                 return json.dumps({"error": "No user is currently logged in."})
             result = query_user_bookings(current_user_email)
+
+        elif tool_name == "get_payment_info":
+            result = query_payment_info(
+                booking_id=params["booking_id"]
+            )
 
         elif tool_name == "get_available_seats":
             result = query_available_seats(**params)
@@ -413,6 +456,7 @@ def _execute_tool(
                     origin_id=origin_id,
                     destination_id=destination_id,
                     network=network,
+                    fare_class="standard"
                 )
             else:
                 result = query_shortest_route(
@@ -432,10 +476,25 @@ def _execute_tool(
 
         elif tool_name == "get_delay_ripple":
             result = query_delay_ripple(
-                delayed_station_id=params["station_id"],
+                delayed_station_id=params.get("station_id", params.get("delayed_station_id")),
                 hops=params.get("hops", 2),
             )
 
+        elif tool_name == "get_station_connections":
+            result = query_station_connections(
+            station_id=params["station_id"]
+            )
+
+        elif tool_name == "find_adjacent_seats":
+            result = auto_select_adjacent_seats(
+            schedule_id=params["schedule_id"],
+            count=int(params.get("count", 2)),
+            fare_class=params.get("fare_class", "standard")
+        )
+        elif tool_name == "get_my_profile":
+            result = query_user_profile(
+            user_id=params["user_id"]
+            )
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
 
@@ -621,6 +680,9 @@ JSON:"""
                 "Rail fare/cost/price questions → check_national_rail_availability then get_national_rail_fare. "
                 "Schedule/timetable/trains/services questions → check_national_rail_availability or check_metro_availability. "
                 "Only call a tool when needed. Output nothing except tool calls."
+                "NEVER output the tool JSON format in your conversational response. Only use the native tool calling mechanism."
+                "NEVER attempt to answer routing, schedule, or factual questions using your own knowledge or guessing. You MUST call the appropriate tool FIRST, wait for the result quietly, and ONLY THEN provide an answer based strictly on the tool's output."
+                "If the user asks for available seats, you MUST call get_available_seats."
             ),
         )
         if debug:
