@@ -352,8 +352,8 @@ def query_metro_fare(
 
 
             total_fare = (
-                float(result["base_fare_usd"])
-                + float(result["per_stop_rate_usd"]) * stops_travelled
+                Decimal(str(result["base_fare_usd"]))
+                + Decimal(str(result["per_stop_rate_usd"])) * stops_travelled
             )
 
 
@@ -415,8 +415,8 @@ def query_national_rail_fare(
 
 
             total_fare = (
-                float(result["base_fare_usd"])
-                + float(result["per_stop_rate_usd"]) * stops_travelled
+                Decimal(str(result["base_fare_usd"]))
+                + Decimal(str(result["per_stop_rate_usd"])) * stops_travelled
             )
 
 
@@ -432,7 +432,9 @@ def query_available_seats(
     fare_class: str,
 ) -> list[dict]:
     """
-                                hashed_password,
+    List available seats for a given schedule, date, and fare class.
+
+
     Args:
         schedule_id: e.g. "NR_SCH01"
         travel_date: e.g. "2025-06-01"
@@ -456,10 +458,10 @@ def query_available_seats(
             ON b.schedule_id = s.schedule_id
            AND b.coach = s.coach
            AND b.seat_id = s.seat_id
-           AND b.travel_date = %s
+           AND b.travel_date = %s::date  
            AND b.status <> 'cancelled'
         WHERE s.schedule_id = %s
-          AND c.fare_class = %s
+          AND LOWER(c.fare_class) = LOWER(%s) 
           AND b.booking_id IS NULL
         ORDER BY
             s.coach,
@@ -635,10 +637,9 @@ def query_national_rail_availability(
                 - os.travel_time_from_origin_min AS travel_time_min,
 
 
-            COUNT(DISTINCT (seat.coach, seat.seat_id)) AS total_seats,
-            COUNT(DISTINCT b.booking_id) AS booked_seats,
-            COUNT(DISTINCT (seat.coach, seat.seat_id))
-                - COUNT(DISTINCT b.booking_id) AS available_seats
+            COUNT(seat.seat_id) AS total_seats,
+            COUNT(b.booking_id) AS booked_seats,
+            COUNT(seat.seat_id) - COUNT(b.booking_id) AS available_seats
 
 
         FROM national_rail_schedules nrs
