@@ -83,7 +83,7 @@ def query_shortest_route(
         CALL apoc.algo.dijkstra(
             origin, 
             destination, 
-            'CONNECTED_TO|INTERCHANGES_WITH', 
+            'METRO_LINK|RAIL_LINK|INTERCHANGE_TO', 
             'travel_time_min'
         ) YIELD path, weight AS total_time_min
         
@@ -216,7 +216,7 @@ def query_cheapest_route(
         CALL apoc.algo.dijkstra(
             origin, 
             destination, 
-            'CONNECTED_TO|INTERCHANGES_WITH', 
+            'METRO_LINK|RAIL_LINK|INTERCHANGE_TO', 
             weight_property
         ) YIELD path, weight AS total_fare_usd
         
@@ -289,7 +289,7 @@ def query_cheapest_route(
                 travel_time_min = rel.get("travel_time_min")
                 transfer_time_min = rel.get("transfer_time_min")
 
-                if rel.type == "INTERCHANGES_WITH":
+                if rel.type == "INTERCHANGE_TO":
                     estimated_fare_usd = 0.0
                 elif (
                     from_station["network_type"] == "metro"
@@ -393,7 +393,7 @@ def query_alternative_routes(
                     AND destination:NationalRailStation)
               )
 
-        MATCH path = (origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..8]-(destination)
+        MATCH path = (origin)-[:METRO_LINK|RAIL_LINK|INTERCHANGE_TO*1..8]-(destination)
 
         WHERE none(n IN nodes(path) WHERE n.station_id = $avoid_station_id)
 
@@ -407,12 +407,12 @@ def query_alternative_routes(
                 OR (
                     $network = 'metro'
                     AND all(n IN nodes(path) WHERE n:MetroStation)
-                    AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
+                    AND all(r IN relationships(path) WHERE type(r) = 'METRO_LINK')
                 )
                 OR (
                     $network IN ['rail', 'national_rail']
                     AND all(n IN nodes(path) WHERE n:NationalRailStation)
-                    AND all(r IN relationships(path) WHERE type(r) = 'CONNECTED_TO')
+                    AND all(r IN relationships(path) WHERE type(r) = 'RAIL_LINK')
                 )
               )
 
@@ -532,11 +532,11 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
                 OR destination:NationalRailStation
               )
 
-        MATCH path = shortestPath((origin)-[:CONNECTED_TO|INTERCHANGES_WITH*1..20]-(destination))
+        MATCH path = shortestPath((origin)-[:METRO_LINK|RAIL_LINK|INTERCHANGE_TO*1..20]-(destination))
 
         WHERE any(
             r IN relationships(path)
-            WHERE type(r) = 'INTERCHANGES_WITH'
+            WHERE type(r) = 'INTERCHANGE_TO'
         )
 
         WITH
@@ -630,7 +630,7 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
                     }
                 )
 
-                if relationship_type == "INTERCHANGES_WITH":
+                if relationship_type == "INTERCHANGE_TO":
                     interchange_points.append(
                         {
                             "from_station_id": from_station["station_id"],
@@ -668,7 +668,7 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
     Returns:
         List of dicts: {station_id, name, hops_away, lines_affected}.
     """
-    safe_hops = max(1, min(int(hops), 10))
+    safe_hops = max(0, min(int(hops), 10))
 
     cypher = f"""
         MATCH (start)
@@ -678,7 +678,7 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
                 OR start:NationalRailStation
               )
 
-        MATCH path = (start)-[:CONNECTED_TO|INTERCHANGES_WITH*1..{safe_hops}]-(affected)
+        MATCH path = (start)-[:METRO_LINK|RAIL_LINK|INTERCHANGE_TO*0..{safe_hops}]-(affected)
 
         WHERE affected.station_id <> $delayed_station_id
 
@@ -726,7 +726,7 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
                         if line:
                             lines_affected.add(line)
 
-                        if rel.type == "INTERCHANGES_WITH":
+                        if rel.type == "INTERCHANGE_TO":
                             lines_affected.add("interchange")
 
                 affected_stations.append(
@@ -752,7 +752,7 @@ def query_station_connections(station_id: str) -> list[dict]:
         List of direct connection dictionaries.
     """
     cypher = """
-        MATCH (s)-[r:CONNECTED_TO|INTERCHANGES_WITH]-(neighbor)
+        MATCH (s)-[r:METRO_LINK|RAIL_LINK|INTERCHANGE_TO]-(neighbor)
         WHERE s.station_id = $station_id
           AND (
                 s:MetroStation

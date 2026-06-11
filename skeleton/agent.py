@@ -47,6 +47,7 @@ from databases.relational.queries import (
     execute_booking,
     execute_cancellation,
     query_policy_vector_search,
+    query_payment_info,
 )
 from databases.graph.queries import (
     query_shortest_route,
@@ -313,6 +314,7 @@ find_route(origin_id, destination_id, optimise_by?)
 check_national_rail_availability(origin_id, destination_id, travel_date?)
 get_national_rail_fare(schedule_id, fare_class, stops_travelled)
 check_metro_availability(origin_id, destination_id)
+get_metro_fare(origin_id, destination_id)
 calculate_metro_fare(schedule_id, stops_travelled)
 get_available_seats(schedule_id, travel_date, fare_class)
 make_booking(schedule_id, origin_station_id, destination_station_id, travel_date, fare_class, seat_id, ticket_type?)
@@ -363,14 +365,7 @@ def _execute_tool(
                 result = {"error": "No metro service found between these stations."}
             else:
                 sched = schedules[0]
-                stops = sched.get("stops_in_order") or []
-                if isinstance(stops, str):
-                    import json as _json
-                    stops = _json.loads(stops)
-                try:
-                    n_stops = stops.index(params["destination_id"]) - stops.index(params["origin_id"])
-                except ValueError:
-                    n_stops = 1
+                n_stops = sched.get("stops_travelled", 1)
                 fare = query_metro_fare(sched["schedule_id"], n_stops)
                 result = {
                     "origin":       sched.get("origin_name", params["origin_id"]),
@@ -486,14 +481,20 @@ def _execute_tool(
             )
 
         elif tool_name == "find_adjacent_seats":
+            # 先抓取該班次的座位清單
+            seats = query_available_seats(
+                schedule_id=params["schedule_id"],
+                travel_date=params["travel_date"],
+                fare_class=params["fare_class"]
+           )
+         # 再進行鄰近計算
             result = auto_select_adjacent_seats(
-            schedule_id=params["schedule_id"],
-            count=int(params.get("count", 2)),
-            fare_class=params.get("fare_class", "standard")
-        )
+                available_seats=seats,
+                count=int(params.get("count", 2))
+            )
         elif tool_name == "get_my_profile":
             result = query_user_profile(
-            user_id=params["user_id"]
+                user_email=current_user_email
             )
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
@@ -731,6 +732,12 @@ JSON:"""
         _fallback("find_route",
                   {"origin_id": _station_ids[0].upper(), "destination_id": _station_ids[1].upper(), "optimise_by": _opt},
                   "route query")
+    # 1.5 Station Connections (單一車站的直達站查詢)
+    elif not tool_calls and len(_station_ids) == 1:
+        _conn_triggers = {"direct from", "directly from", "lines through", "connections from", "reach from", "直達", "經過", "連接"}
+        if any(kw in _lower for kw in _conn_triggers):
+            _fallback("get_station_connections", {"station_id": _station_ids[0].upper()}, "station connections query")
+
 
     # 2. Availability / trains / schedules between two stations
     elif not tool_calls and _two_stations:
