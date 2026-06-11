@@ -37,8 +37,6 @@ def seed():
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     with driver.session() as session:
 
-        session.run("MATCH (n) DETACH DELETE n")
-        print("  Cleared existing graph data")
 
         # 1. 建立 MetroStation 節點
         session.run("""

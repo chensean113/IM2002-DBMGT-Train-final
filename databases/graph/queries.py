@@ -72,18 +72,24 @@ def query_shortest_route(
     if network not in {"auto", "metro", "rail", "national_rail"}:
         network = "auto"
 
-    cypher = """
+    allowed_rels = 'METRO_LINK|RAIL_LINK|INTERCHANGE_TO'
+    if network == 'metro':
+        allowed_rels = 'METRO_LINK'
+    elif network in ['rail', 'national_rail']:
+        allowed_rels = 'RAIL_LINK'
+
+    cypher = """ 
         MATCH (origin), (destination)
         WHERE origin.station_id = $origin_id
           AND destination.station_id = $destination_id
           AND (origin:MetroStation OR origin:NationalRailStation)
           AND (destination:MetroStation OR destination:NationalRailStation)
-        
+
         // 呼叫 APOC Dijkstra 演算法 (以 travel_time_min 作為權重)
         CALL apoc.algo.dijkstra(
             origin, 
             destination, 
-            'METRO_LINK|RAIL_LINK|INTERCHANGE_TO', 
+            $allowed_rels, 
             'travel_time_min'
         ) YIELD path, weight AS total_time_min
         
@@ -196,6 +202,12 @@ def query_cheapest_route(
     if network not in {"auto", "metro", "rail", "national_rail"}:
         network = "auto"
 
+    allowed_rels = 'METRO_LINK|RAIL_LINK|INTERCHANGE_TO'
+    if network == 'metro':
+        allowed_rels = 'METRO_LINK'
+    elif network in ['rail', 'national_rail']:
+        allowed_rels = 'RAIL_LINK'
+
     if fare_class not in {"standard", "first"}:
         fare_class = "standard"
 
@@ -216,7 +228,7 @@ def query_cheapest_route(
         CALL apoc.algo.dijkstra(
             origin, 
             destination, 
-            'METRO_LINK|RAIL_LINK|INTERCHANGE_TO', 
+            $allowed_rels, 
             weight_property
         ) YIELD path, weight AS total_fare_usd
         
@@ -243,6 +255,7 @@ def query_cheapest_route(
                 destination_id=destination_id,
                 network=network,
                 fare_class=fare_class,
+                allowed_rels=allowed_rels,
             ).single()
 
             if record is None:
@@ -679,8 +692,6 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
               )
 
         MATCH path = (start)-[:METRO_LINK|RAIL_LINK|INTERCHANGE_TO*0..{safe_hops}]-(affected)
-
-        WHERE affected.station_id <> $delayed_station_id
 
         WITH
             affected,
