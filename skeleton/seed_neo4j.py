@@ -62,57 +62,57 @@ def seed():
         """, stations=rail_stations)
         print("  Created NationalRailStation nodes")
 
-        # 3. 建立 Metro 內部的 CONNECTED_TO 關係 (含 line 與 travel_time_min 屬性)
+        # 3. 建立 Metro 內部的 METRO_LINK 關係 (含 line 與 travel_time_min 屬性)
         session.run("""
             UNWIND $stations AS s
             MATCH (a:MetroStation {station_id: s.station_id})
             UNWIND s.adjacent_stations AS adj
             MATCH (b:MetroStation {station_id: adj.station_id})
-            MERGE (a)-[r:CONNECTED_TO {
+            MERGE (a)-[r:METRO_LINK {
                 line: adj.line,
                 travel_time_min: adj.travel_time_min,
                 standard_fare_usd: 0.30,
                 first_class_fare_usd: 0.30
             }]->(b)
         """, stations=metro_stations)
-        print("  Created Metro CONNECTED_TO relationships")
+        print("  Created Metro METRO_LINK relationships")
 
-        # 4. 建立 National Rail 內部的 CONNECTED_TO 關係 (含 line 與 travel_time_min 屬性)
+        # 4. 建立 National Rail 內部的 RAIL_LINK 關係 (含 line 與 travel_time_min 屬性)
         session.run("""
             UNWIND $stations AS s
             MATCH (a:NationalRailStation {station_id: s.station_id})
             UNWIND s.adjacent_stations AS adj
             MATCH (b:NationalRailStation {station_id: adj.station_id})
-            MERGE (a)-[r:CONNECTED_TO {
+            MERGE (a)-[r:RAIL_LINK {
                 line: adj.line, 
                 travel_time_min: adj.travel_time_min,
                 standard_fare_usd: 1.50,
                 first_class_fare_usd: 3.00
             }]->(b)
         """, stations=rail_stations)
-        print("  Created National Rail CONNECTED_TO relationships")
+        print("  Created National Rail RAIL_LINK relationships")
 
-        # 5. 建立跨系統轉乘的 INTERCHANGES_WITH 關係 (捷運 <-> 台鐵)
+        # 5. 建立跨系統轉乘的 INTERCHANGE_TO 關係 (捷運 <-> 台鐵)
         # 根據 Schema 約定，加入預設屬性 transfer_time_min: 5
         session.run("""
             UNWIND $stations AS s
             WITH s WHERE s.is_interchange_national_rail = true AND s.interchange_national_rail_station_id IS NOT NULL
             MATCH (m:MetroStation {station_id: s.station_id})
             MATCH (n:NationalRailStation {station_id: s.interchange_national_rail_station_id})
-            MERGE (m)-[:INTERCHANGES_WITH {
+            MERGE (m)-[:INTERCHANGE_TO {
                 transfer_time_min: 5,
                 travel_time_min: 5,
                 standard_fare_usd: 0.0,
                 first_class_fare_usd: 0.0
             }]->(n)
-            MERGE (n)-[:INTERCHANGES_WITH {
+            MERGE (n)-[:INTERCHANGE_TO {
                 transfer_time_min: 5,
                 travel_time_min: 5,
                 standard_fare_usd: 0.0,
                 first_class_fare_usd: 0.0
             }]->(m)
         """, stations=metro_stations)
-        print("  Created INTERCHANGES_WITH relationships (transfer_time_min: 5)")
+        print("  Created INTERCHANGE_TO relationships (transfer_time_min: 5)")
         
     driver.close()
     print("\nNeo4j graph seeded successfully.")

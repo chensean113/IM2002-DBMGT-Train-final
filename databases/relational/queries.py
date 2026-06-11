@@ -1171,7 +1171,7 @@ def execute_booking(
 
 
                 LIMIT 1
-                FOR UPDATE OF ns SKIP LOCKED
+                FOR UPDATE OF ns SKIP LOCKED 
             """
 
 
