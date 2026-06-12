@@ -106,6 +106,7 @@ def query_shortest_route(
                 origin_id=origin_id,
                 destination_id=destination_id,
                 network=network,
+                allowed_rels=allowed_rels,
             ).single()
 
             if record is None:
@@ -577,7 +578,6 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
                 origin_id=origin_id,
                 destination_id=destination_id,
             ).single()
-
             if record is None:
                 return {
                     "found": False,
