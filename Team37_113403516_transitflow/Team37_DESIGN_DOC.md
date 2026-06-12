@@ -584,11 +584,9 @@ Third, `payments` and `feedback` use `transaction_ref` instead of a strict forei
 
 User authentication data is separated from the main user profile. Basic profile data is stored in `users`, while password-related data is stored in `user_passwords`. This keeps authentication data separate from general profile information and makes the schema clearer.
 
-The `user_passwords.password` column stores a bcrypt password hash rather than a plain-text password. bcrypt is preferred over MD5, SHA-1, or plain SHA-256 because those algorithms are fast general-purpose hash functions. Fast hashes are not suitable for password storage because attackers can test many password guesses quickly using GPUs or precomputed rainbow tables.
+The `user_passwords.password` column stores a bcrypt password hash rather than a plain-text password. **We chose bcrypt over fast algorithms like MD5 or SHA-1 because it is an adaptive, computationally expensive algorithm.** MD5 and SHA-1 are designed to be fast, which makes them highly vulnerable to brute-force attacks using GPUs. bcrypt uses key stretching through a configurable cost factor, making each password verification intentionally slower, thus significantly increasing the time and resources required for an attacker to brute-force the hashes.
 
-bcrypt is more appropriate because it is an adaptive password hashing algorithm. It uses key stretching through a configurable cost factor, making each password verification intentionally slower. This increases resistance against brute-force attacks. The cost factor can also be increased in the future as hardware becomes faster.
-
-Salt management is also important. A salt is a random value added to the password before hashing. It ensures that two users with the same password still receive different stored hash values. This prevents attackers from using one precomputed rainbow table to attack many users at once.
+Furthermore, **salt management is critical for defending against rainbow-table attacks.** A salt is a unique, random string added to the password before hashing. Even if two users choose the exact same password (e.g., "password123"), the unique salt ensures their final stored hash values are completely different. This prevents attackers from using precomputed tables of hashes (rainbow tables) to reverse-engineer passwords en masse.
 
 In standard bcrypt usage, the generated bcrypt hash string already includes the salt and cost factor. Our schema also includes a `salt` column, which can be used if the implementation manages salt explicitly. The key design point is that the stored `password` value should be a bcrypt hash, not the original password.
 
@@ -649,9 +647,11 @@ MS01, MS02, MS03
 NR01, NR02, NR03
 ```
 
-We use `station_id` as the node identity because it is stable, compact, and already used in the source data and PostgreSQL schema. Station names may be similar or may change in the future, but station IDs are designed to remain consistent.
+**We explicitly chose `station_id` as the primary node identity (rather than the station's string name) for several critical reasons:**
 
-Using the same `station_id` in both PostgreSQL and Neo4j also helps connect the two database systems. For example, PostgreSQL tables such as `metro_stations`, `national_rail_stations`, `metro_schedule_stops`, and `national_rail_schedule_stops` use station IDs. Neo4j can use the same station IDs for route traversal, while PostgreSQL can use them for schedule, booking, and fare details.
+1.  **Stability & Immutability:** Station names can change over time (e.g., due to rebranding or sponsorship), but internal IDs are designed to remain permanent. Using names as keys would risk breaking historical route data upon renaming.
+2.  **Uniqueness:** It guarantees uniqueness even if two stations in different regions share similar names (e.g., "Central Station" vs. "Central Station North").
+3.  **Cross-Database Consistency:** Using the exact same `station_id` in both PostgreSQL and Neo4j acts as a logical foreign key between the two database paradigms. PostgreSQL uses them for schedules, bookings, and fare details, while Neo4j uses them for rapid route traversal. When a path is found in Neo4j, the system can instantly look up the corresponding transactional details in PostgreSQL without needing a secondary text-matching step.
 
 ---
 
@@ -729,13 +729,13 @@ Storing route-specific values on relationships allows Neo4j to calculate route m
 
 ## 3.6 Why Neo4j Is Better Than Relational Tables for Routing
 
-A relational database can store station adjacency data, but route-finding queries are more complex in SQL. To find the shortest path between two stations in PostgreSQL, the system would need to use recursive common table expressions. The query would need to repeatedly join an adjacency table, keep track of visited stations, avoid cycles, accumulate total travel time, and compare multiple possible paths.
+A relational database can store station adjacency data, but route-finding queries are more complex in SQL. To find the shortest path between two stations in PostgreSQL, the system would need to use recursive common table expressions (CTEs). 
 
-In Neo4j, the same problem is expressed more naturally because stations are nodes and connections are relationships. A shortest path query can use Dijkstra's algorithm or an equivalent weighted shortest-path method, using `travel_time_min` as the edge weight. This directly matches the structure of the transit network.
+**The core algorithmic difference lies in complexity:**
+- **Relational (SQL):** Recursive CTEs rely on repeated table scans and `JOIN` operations. As the path length increases, the search space and the number of required joins can grow exponentially (O(b^d) complexity). Furthermore, tracking "visited" nodes and accumulating travel times manually in SQL is computationally expensive and memory-intensive.
+- **Graph (Neo4j):** Neo4j treats relationships as "first-class citizens." It uses **index-free adjacency**, meaning it can traverse from one station to the next by simply following memory pointers (pointer chasing) rather than performing expensive table joins. 
 
-Delay ripple queries are also better suited to a graph database. A delay ripple query asks which stations are within a certain number of hops from a delayed station. In SQL, this again requires recursive CTEs and manual hop counting. In Neo4j, this can be handled through breadth-first search logic or variable-length path traversal.
-
-Therefore, Neo4j is used for routing and network traversal, while PostgreSQL is used for structured operational records.
+For the shortest path, Neo4j uses optimized implementations of **Dijkstra's algorithm**. For delay ripple queries, it uses **Breadth-First Search (BFS)**. These graph-native algorithms are significantly more efficient than SQL's set-based recursion for deep or variable-length path traversal, providing linear performance relative to the number of explored relationships.
 
 ---
 

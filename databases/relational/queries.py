@@ -126,6 +126,8 @@ def query_user_profile(user_email: str) -> Optional[dict]:
             result["first_name"] = name_parts[0]
             result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
 
+            if result.get("date_of_birth"):
+                result["year_of_birth"] = result["date_of_birth"].year
 
             return result
 #login user
@@ -188,6 +190,8 @@ def login_user(email: str, password: str) -> Optional[dict]:
             result["first_name"] = name_parts[0]
             result["surname"] = name_parts[1] if len(name_parts) > 1 else ""
 
+            if result.get("date_of_birth"):
+                result["year_of_birth"] = result["date_of_birth"].year
 
             return result
 #user secret question
@@ -677,7 +681,14 @@ def query_national_rail_availability(
 
 
         WHERE os.stop_order < ds.stop_order
-
+          AND (
+                %s::date IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM national_rail_schedule_operating_days od
+                    WHERE od.schedule_id = nrs.schedule_id
+                      AND od.day_of_week = TRIM(LOWER(TO_CHAR(%s::date, 'dy')))
+                )
+          )
 
         GROUP BY
             nrs.schedule_id,
@@ -709,7 +720,7 @@ def query_national_rail_availability(
         ) as cur:
             cur.execute(
                 sql,
-                (origin_id, destination_id, travel_date, travel_date),
+                (origin_id, destination_id, travel_date, travel_date, travel_date, travel_date),
             )
             return [dict(row) for row in cur.fetchall()]
 

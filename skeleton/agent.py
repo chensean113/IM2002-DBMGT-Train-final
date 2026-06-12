@@ -92,7 +92,7 @@ def _inject_station_ids(text: str) -> str:
         sid = _STATION_INDEX[name]
         if sid in seen_ids:
             continue
-        pattern = re.compile(re.escape(name), re.IGNORECASE)
+        pattern = re.compile(r'\b' + re.escape(name) + r'\b', re.IGNORECASE)
         if pattern.search(result):
             result = pattern.sub(f"{name} ({sid})", result)
             seen_ids.add(sid)
@@ -199,9 +199,10 @@ TOOLS = [
     {
         "name": "make_booking",
         "description": (
-            "Create a national rail booking for the logged-in user. "
-            "Returns complete booking details including station names (origin_name, destination_name) and line info. "
-            "REQUIRES LOGIN. Only call after the user has explicitly confirmed all booking details. "
+            "Create a national rail booking for the logged-in user. REQUIRES LOGIN. "
+            "IMPORTANT: You MUST have a 'schedule_id' from check_national_rail_availability before calling this. "
+            "If you don't have the ID yet, call check_national_rail_availability first. "
+            "Only call this after the user has explicitly confirmed all booking details. "
             "Do NOT call this speculatively."
         ),
         "parameters": {
@@ -210,7 +211,7 @@ TOOLS = [
             "destination_station_id": {"type": "string", "description": "e.g. NR05"},
             "travel_date":            {"type": "string", "description": "YYYY-MM-DD"},
             "fare_class":             {"type": "string", "description": "standard or first"},
-            "seat_id":                {"type": "string", "description": "Specific seat ID (e.g. B05) or 'any' for auto-assign"},
+            "seat_id":                {"type": "string", "description": "Specific seat ID (e.g. B05) or 'any' for auto-assign. If the user has not specified a seat, use 'any' and then call get_available_seats to find a good one."},
             "ticket_type":            {"type": "string", "description": "single or return (default single)"},
         },
         "required": ["schedule_id", "origin_station_id", "destination_station_id", "travel_date", "fare_class", "seat_id"],
@@ -488,8 +489,8 @@ def _execute_tool(
                 schedule_id=params["schedule_id"],
                 travel_date=params["travel_date"],
                 fare_class=params["fare_class"]
-           )
-         # 再進行鄰近計算
+            )
+            # 再進行鄰近計算
             result = auto_select_adjacent_seats(
                 available_seats=seats,
                 count=int(params.get("count", 2))
@@ -686,6 +687,8 @@ JSON:"""
                 "NEVER output the tool JSON format in your conversational response. Only use the native tool calling mechanism."
                 "NEVER attempt to answer routing, schedule, or factual questions using your own knowledge or guessing. You MUST call the appropriate tool FIRST, wait for the result quietly, and ONLY THEN provide an answer based strictly on the tool's output."
                 "If the user asks for available seats, you MUST call get_available_seats."
+                "If the user did not choose a specific seat, always set seat_id to 'any'. "
+                "Do not ask the user for a seat ID if they haven't mentioned one."
             ),
         )
         if debug:
@@ -763,6 +766,21 @@ JSON:"""
                                "list booking", "show my", "view my"}
         if any(kw in _lower for kw in _personal_triggers):
             _fallback("get_user_bookings", {}, "personal booking query")
+
+    # 4. 處理「意圖訂票但還沒有具體車次 ID」的狀況
+    if "book" in _lower and _two_stations and not _tool_selected("make_booking", "schedule_id"):
+        o, d = _station_ids[0].upper(), _station_ids[1].upper()
+        # 嘗試從句子中抓取日期 (YYYY-MM-DD)，抓不到就用今天
+        _travel_date = next(
+            (w for w in _lower.split() if re.match(r'\d{4}-\d{2}-\d{2}', w)), 
+            str(date.today())
+        )
+        _params = {"origin_id": o, "destination_id": d, "travel_date": _travel_date}
+            
+        # 根據車站開頭決定是用國鐵還是地鐵查詢 (雖然地鐵目前不能訂票，但可以先導向查詢)
+        _tool = "check_national_rail_availability" if o.startswith("NR") else "check_metro_availability"
+        _fallback(_tool, _params, "auto-routing booking intent to availability check")
+    
 
     # Step 2: Execute each tool call against the real databases
     tool_results = []
