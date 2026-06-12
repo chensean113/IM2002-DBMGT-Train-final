@@ -200,6 +200,7 @@ TOOLS = [
         "name": "make_booking",
         "description": (
             "Create a national rail booking for the logged-in user. "
+            "Returns complete booking details including station names (origin_name, destination_name) and line info. "
             "REQUIRES LOGIN. Only call after the user has explicitly confirmed all booking details. "
             "Do NOT call this speculatively."
         ),
@@ -218,6 +219,7 @@ TOOLS = [
         "name": "cancel_booking",
         "description": (
             "Cancel a national rail booking for the logged-in user. "
+            "Returns full booking details and refund calculations. "
             "REQUIRES LOGIN. Only call after the user has explicitly confirmed the cancellation. "
             "The refund amount is calculated automatically per the applicable policy."
         ),
