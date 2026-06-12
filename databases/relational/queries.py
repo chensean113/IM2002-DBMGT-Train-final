@@ -695,6 +695,7 @@ def query_national_rail_availability(
             ds.stop_order,
             os.travel_time_from_origin_min,
             ds.travel_time_from_origin_min
+        HAVING COUNT(seat.seat_id) > 0
         ORDER BY
             nrs.line,
             nrs.service_type,
