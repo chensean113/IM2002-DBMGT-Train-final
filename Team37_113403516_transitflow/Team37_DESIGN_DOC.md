@@ -862,6 +862,8 @@ cancellation policies
 ticket rules
 accessibility information
 general transit policy text
+lost property procedures (extended feature)
+group booking discounts (extended feature)
 ```
 
 These documents are embedded because users may ask policy-related questions in natural language. For example, a user may ask:

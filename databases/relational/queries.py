@@ -1097,21 +1097,24 @@ def execute_booking(
             booking_sql = """
                 SELECT
                     nrs.schedule_id,
+                    nrs.line,
+                    nrs.service_type,
                     (
                         nrs.first_train_time
                         + os.travel_time_from_origin_min * INTERVAL '1 minute'
                     ) AS departure_time,
-                    nrs.service_type,
 
+                    os.station_id AS origin_station_id,
+                    orig_st.name AS origin_name,
+                    ds.station_id AS destination_station_id,
+                    dest_st.name AS destination_name,
 
                     os.stop_order AS origin_stop_order,
                     ds.stop_order AS destination_stop_order,
                     ds.stop_order - os.stop_order AS stops_travelled,
 
-
                     ns.coach,
                     ns.seat_id,
-
 
                     f.fare_class,
                     f.base_fare_usd,
@@ -1121,34 +1124,33 @@ def execute_booking(
                         + f.per_stop_rate_usd * (ds.stop_order - os.stop_order)
                     ) AS amount_usd
 
-
                 FROM national_rail_schedules nrs
 
+                JOIN national_rail_stations orig_st
+                    ON orig_st.station_id = %s
+
+                JOIN national_rail_stations dest_st
+                    ON dest_st.station_id = %s
 
                 JOIN national_rail_schedule_stops os
                     ON os.schedule_id = nrs.schedule_id
-                   AND os.station_id = %s
-
+                   AND os.station_id = orig_st.station_id
 
                 JOIN national_rail_schedule_stops ds
                     ON ds.schedule_id = nrs.schedule_id
-                   AND ds.station_id = %s
-
+                   AND ds.station_id = dest_st.station_id
 
                 JOIN national_rail_schedule_fares f
                     ON f.schedule_id = nrs.schedule_id
                    AND f.fare_class = %s
 
-
                 JOIN national_rail_seats ns
                     ON ns.schedule_id = nrs.schedule_id
-
 
                 JOIN national_rail_coaches c
                     ON c.schedule_id = ns.schedule_id
                    AND c.coach = ns.coach
                    AND c.fare_class = %s
-
 
                 LEFT JOIN bookings b
                     ON b.schedule_id = ns.schedule_id
@@ -1157,23 +1159,19 @@ def execute_booking(
                    AND b.travel_date = %s::date
                    AND b.status <> 'cancelled'
 
-
                 WHERE nrs.schedule_id = %s
                   AND os.stop_order < ds.stop_order
                   AND b.booking_id IS NULL
                   AND (%s = 'any' OR ns.seat_id = %s)
-
 
                 ORDER BY
                     ns.coach,
                     ns.row_number,
                     ns.seat_column
 
-
                 LIMIT 1
                 FOR UPDATE OF ns SKIP LOCKED 
             """
-
 
             cur.execute(
                 booking_sql,
@@ -1189,19 +1187,15 @@ def execute_booking(
                 ),
             )
 
-
             booking_info = cur.fetchone()
-
 
             if booking_info is None:
                 conn.rollback()
                 return False, "No valid available seat found for this journey."
 
-
             booking_id = _gen_booking_id()
             payment_id = _gen_payment_id()
             now = datetime.now(timezone.utc)
-
 
             insert_booking_sql = """
                 INSERT INTO bookings (
@@ -1244,7 +1238,6 @@ def execute_booking(
                     booked_at
             """
 
-
             cur.execute(
                 insert_booking_sql,
                 (
@@ -1266,8 +1259,14 @@ def execute_booking(
                 ),
             )
 
-
             booking_row = dict(cur.fetchone())
+            booking_row.update({
+                "origin_name":      booking_info["origin_name"],
+                "destination_name": booking_info["destination_name"],
+                "line":             booking_info["line"],
+                "service_type":     booking_info["service_type"],
+            })
+
 
 
             insert_payment_sql = """
@@ -1357,8 +1356,12 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                     b.fare_class,
                     b.coach,
                     b.seat_id,
+                    b.stops_travelled,
                     b.amount_usd,
                     b.status,
+                    b.booked_at,
+                    b.travelled_at,
+                    nrs.line,
                     nrs.service_type
                 FROM bookings b
                 JOIN national_rail_schedules nrs
@@ -1522,24 +1525,19 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 WHERE booking_id = %s
                   AND user_id = %s
                 RETURNING
-                    booking_id,
-                    user_id,
-                    schedule_id,
-                    origin_station_id,
-                    destination_station_id,
-                    travel_date,
-                    departure_time::text AS departure_time,
-                    ticket_type,
-                    fare_class,
-                    coach,
-                    seat_id,
-                    amount_usd,
                     status
             """
 
 
             cur.execute(update_sql, (booking_id, user_id))
-            updated_booking = dict(cur.fetchone())
+            update_res = cur.fetchone()
+            
+            # Merge update into the original full record
+            updated_booking = dict(booking)
+            updated_booking["status"] = update_res["status"]
+            # Convert time/date to string for JSON compatibility if needed, 
+            # though the agent's _execute_tool handle it with default=str
+            updated_booking["departure_time"] = str(updated_booking["departure_time"])
 
 
             conn.commit()
